@@ -45,20 +45,6 @@ echo "$nuevo" > /etc/reseller
 echo
 echo -e "${verde}✅ Éxito:${reset} El nombre de Reseller fue cambiado a: ${negrita}$nuevo${reset}"
 echo
-
-# Preguntar si quiere reiniciar el panel/script
-read -p "🔄 ¿Quieres reiniciar el panel ahora? (s/n): " resp
-if [[ "$resp" =~ ^[sS]$ ]]; then
-    if systemctl restart admrufu 2>/dev/null; then
-        echo -e "${verde}⚡ Panel reiniciado correctamente.${reset}"
-    else
-        echo -e "${amarillo}ℹ️ No se encontró el servicio 'admrufu'. Reinicia el panel manualmente.${reset}"
-    fi
-else
-    echo -e "${amarillo}ℹ️ Recuerda reiniciar manualmente el panel para aplicar el cambio.${reset}"
-fi
-
-echo
 echo -e "${azul}${negrita}═══════════════════════════════════════"
 echo "         CAMBIO DE RESELLER LISTO        "
 echo -e "═══════════════════════════════════════${reset}"
