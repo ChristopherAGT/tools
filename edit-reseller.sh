@@ -1,0 +1,53 @@
+#!/bin/bash
+# Script para cambiar el nombre del Reseller en admrufu 2.0
+
+# Colores
+verde="\e[92m"
+rojo="\e[91m"
+azul="\e[94m"
+amarillo="\e[93m"
+negrita="\e[1m"
+reset="\e[0m"
+
+# Limpiar pantalla
+clear
+
+# Banner
+echo -e "${azul}${negrita}"
+echo "═══════════════════════════════════════"
+echo "        CAMBIAR NOMBRE DE RESELLER      "
+echo "═══════════════════════════════════════"
+echo -e "${reset}"
+
+# Mostrar reseller actual
+if [ -f /etc/reseller ]; then
+    actual=$(cat /etc/reseller)
+else
+    actual="(No existe aún)"
+fi
+
+echo -e "👤 ${amarillo}Reseller actual:${reset} $actual"
+echo
+
+# Solicitar nuevo nombre
+read -p "👉 Escribe el nuevo nombre de Reseller: " nuevo
+
+# Validación
+if [ -z "$nuevo" ]; then
+    echo -e "${rojo}❌ Error:${reset} No ingresaste un nombre."
+    exit 1
+fi
+
+# Encerrar el nombre en ⚡️
+final="⚡️ $nuevo ⚡️"
+
+# Guardar nuevo reseller
+echo "$final" > /etc/reseller
+
+# Confirmación
+echo
+echo -e "${verde}✅ Éxito:${reset} El nombre de Reseller fue cambiado a: ${negrita}$final${reset}"
+echo
+echo -e "${azul}${negrita}═══════════════════════════════════════"
+echo "         CAMBIO DE RESELLER LISTO        "
+echo -e "═══════════════════════════════════════${reset}"
