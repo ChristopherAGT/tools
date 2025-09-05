@@ -1,16 +1,19 @@
 #!/bin/bash
 # ==========================================================
 #  KEY-MANAGER - Configurador de Claves SlowDNS (ADMRufu)
-#  Autor: Christopher
+#  Autor: Christopher + ChatGPT
+#  Interfaz profesional con panel fijo y colores intuitivos
 # ==========================================================
 
 set -euo pipefail
 
 # 🎨 Colores
-verde="\e[92m"
-rojo="\e[91m"
-amarillo="\e[93m"
-cyan="\e[96m"
+verde="\e[92m"        # Éxito / Confirmación
+rojo="\e[91m"         # Error
+amarillo="\e[93m"     # Advertencia / Acciones
+cyan="\e[96m"         # Paneles / títulos
+magenta="\e[95m"      # Opciones
+azul="\e[94m"         # Encabezados secundarios
 reset="\e[0m"
 negrita="\e[1m"
 
@@ -35,7 +38,7 @@ show_slowdns_banner() {
     title="CONFIGURADOR DE CLAVES SLOWDNS"
     padding_left=$(( (PANEL_WIDTH - 2 - ${#title}) / 2 ))
     padding_right=$(( PANEL_WIDTH - 2 - padding_left - ${#title} ))
-    printf "${cyan}│%*s%s%*s│${reset}\n" $padding_left "" "$title" $padding_right ""
+    printf "${cyan}│%*s${negrita}${verde}%s${cyan}%*s│${reset}\n" $padding_left "" "$title" $padding_right ""
     echo -e "${cyan}└───────────────────────────────────────────────┘${reset}\n"
 }
 
@@ -60,12 +63,12 @@ ingresar_claves() {
 
     for file in "${PRIVKEY_FILES[@]}"; do
         echo "$PRIVKEY" > "$file"
-        echo -e "  ✅ Privada actualizada en: ${cyan}$file${reset}"
+        echo -e "  ${verde}✅ Privada actualizada en: ${cyan}$file${reset}"
     done
 
     for file in "${PUBKEY_FILES[@]}"; do
         echo "$PUBKEY" > "$file"
-        echo -e "  ✅ Pública actualizada en: ${cyan}$file${reset}"
+        echo -e "  ${verde}✅ Pública actualizada en: ${cyan}$file${reset}"
     done
 
     echo -e "\n${amarillo}🔹 Paso 3: Reiniciando servicio SlowDNS...${reset}"
@@ -92,12 +95,12 @@ mostrar_claves() {
     title="CLAVES ACTUALES"
     padding_left=$(( (PANEL_WIDTH - 2 - ${#title}) / 2 ))
     padding_right=$(( PANEL_WIDTH - 2 - padding_left - ${#title} ))
-    printf "${cyan}│%*s%s%*s│${reset}\n" $padding_left "" "$title" $padding_right ""
+    printf "${cyan}│%*s${negrita}${azul}%s${cyan}%*s│${reset}\n" $padding_left "" "$title" $padding_right ""
     echo -e "${cyan}└───────────────────────────────────────────────┘${reset}\n"
 
-    echo -e "${negrita}Privada:${reset}"
+    echo -e "${magenta}${negrita}Privada:${reset}"
     cat "${PRIVKEY_FILES[0]}"
-    echo -e "\n${negrita}Pública:${reset}"
+    echo -e "\n${magenta}${negrita}Pública:${reset}"
     cat "${PUBKEY_FILES[0]}"
     echo ""
     read -p "Presiona Enter para regresar al menú..."
@@ -134,15 +137,18 @@ menu_principal() {
         title="KEY-MANAGER"
         padding_left=$(( (PANEL_WIDTH - 2 - ${#title}) / 2 ))
         padding_right=$(( PANEL_WIDTH - 2 - padding_left - ${#title} ))
-        printf "${cyan}│%*s%s%*s│${reset}\n" $padding_left "" "$title" $padding_right ""
+        printf "${cyan}│%*s${negrita}${verde}%s${cyan}%*s│${reset}\n" $padding_left "" "$title" $padding_right ""
         echo -e "${cyan}└───────────────────────────────────────────────┘${reset}\n"
 
-        echo -e "${verde}1${reset} 📝 Ingresar nuevas claves"
-        echo -e "${verde}2${reset} 🔍 Mostrar claves actuales"
-        echo -e "${verde}3${reset} 🔄 Reiniciar servicio SlowDNS"
-        echo -e "${verde}0${reset} ❌ Salir"
+        # Opciones
+        echo -e "${magenta}1${reset} 📝 Ingresar nuevas claves"
+        echo -e "${magenta}2${reset} 🔍 Mostrar claves actuales"
+        echo -e "${magenta}3${reset} 🔄 Reiniciar servicio SlowDNS"
+        echo -e "${magenta}0${reset} ❌ Salir"
 
-        echo -ne "\nSelecciona una opción: "
+        # Línea separadora
+        echo -e "${azul}───────────────────────────────────────────────${reset}"
+        echo -ne "Selecciona una opción: "
         read opcion
 
         case $opcion in
