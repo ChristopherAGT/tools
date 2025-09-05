@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================================
 #  Configurador de Claves SlowDNS (ADMRufu)
-#  Versión completa con menú interactivo y diseño profesional
+#  Menú interactivo estilo caja y diseño profesional
 # ==========================================================
 
 set -euo pipefail
@@ -29,12 +29,12 @@ PUBKEY_FILES=(
 SERVICE_NAME="slowdns"
 
 # =========================
-# Función: Mostrar banner
+# Función: Banner principal
 # =========================
 show_banner() {
     clear
     echo -e "${cyan}┌───────────────────────────────────────────────┐${reset}"
-    echo -e "${cyan}│${verde}${negrita}      CONFIGURADOR DE CLAVES SLOWDNS      ${cyan}│${reset}"
+    echo -e "${cyan}│${verde}${negrita}       CONFIGURADOR DE CLAVES SLOWDNS       ${cyan}│${reset}"
     echo -e "${cyan}└───────────────────────────────────────────────┘${reset}\n"
 }
 
@@ -43,7 +43,7 @@ show_banner() {
 # =========================
 ingresar_claves() {
     show_banner
-    echo -e "${amarillo}🔹 Paso 1: Ingresar nuevas claves${reset}"
+    echo -e "${amarillo}🔹 Ingresar nuevas claves${reset}"
     read -p "  👉 Clave PRIVADA: " PRIVKEY
     read -p "  👉 Clave PÚBLICA: " PUBKEY
 
@@ -53,17 +53,12 @@ ingresar_claves() {
         return
     fi
 
-    TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
-    echo -e "\n${amarillo}🔹 Paso 2: Guardando claves con respaldo...${reset}"
-
     for file in "${PRIVKEY_FILES[@]}"; do
-        [[ -f "$file" ]] && cp "$file" "$file.bak.$TIMESTAMP"
         echo "$PRIVKEY" > "$file"
         echo -e "  ✅ Privada actualizada en: ${cyan}$file${reset}"
     done
 
     for file in "${PUBKEY_FILES[@]}"; do
-        [[ -f "$file" ]] && cp "$file" "$file.bak.$TIMESTAMP"
         echo "$PUBKEY" > "$file"
         echo -e "  ✅ Pública actualizada en: ${cyan}$file${reset}"
     done
@@ -92,7 +87,7 @@ mostrar_claves() {
 # Función: Reiniciar SlowDNS
 # =========================
 reiniciar_slowdns() {
-    echo -e "\n${amarillo}🔹 Paso 3: Reiniciando servicio SlowDNS...${reset}"
+    echo -e "\n${amarillo}🔹 Reiniciando servicio SlowDNS...${reset}"
     systemctl daemon-reload
     systemctl restart "$SERVICE_NAME"
     sleep 1
@@ -106,67 +101,37 @@ reiniciar_slowdns() {
 }
 
 # =========================
-# Función: Ver backups de claves
-# =========================
-ver_backups() {
-    show_banner
-    echo -e "${amarillo}🔹 BACKUPS DE CLAVES DISPONIBLES${reset}\n"
-
-    echo -e "${negrita}${cyan}CLAVES PRIVADAS:${reset}"
-    for file in "${PRIVKEY_FILES[@]}"; do
-        backups=($(ls -1 "$file".bak* 2>/dev/null | sort))
-        if [[ ${#backups[@]} -eq 0 ]]; then
-            echo "  Ningún backup encontrado en: $file"
-        else
-            for b in "${backups[@]}"; do
-                echo "  - $b"
-            done
-        fi
-    done
-
-    echo -e "\n${negrita}${cyan}CLAVES PÚBLICAS:${reset}"
-    for file in "${PUBKEY_FILES[@]}"; do
-        backups=($(ls -1 "$file".bak* 2>/dev/null | sort))
-        if [[ ${#backups[@]} -eq 0 ]]; then
-            echo "  Ningún backup encontrado en: $file"
-        else
-            for b in "${backups[@]}"; do
-                echo "  - $b"
-            done
-        fi
-    done
-
-    echo -e "\n${amarillo}🔹 Fin del listado de backups${reset}\n"
-    read -p "Presiona Enter para volver al menú..."
-}
-
-# =========================
-# Menú principal
+# Función: Menú principal estilo caja
 # =========================
 menu_principal() {
     while true; do
         show_banner
-        echo -e "${amarillo}Selecciona una opción:${reset}"
-        echo -e "  ${verde}[1]${reset} Ingresar nuevas claves"
-        echo -e "  ${verde}[2]${reset} Mostrar claves actuales"
-        echo -e "  ${verde}[3]${reset} Reiniciar servicio SlowDNS"
-        echo -e "  ${verde}[4]${reset} Ver backups de claves"
-        echo -e "  ${verde}[5]${reset} Salir"
-        echo -ne "\nOpción: "
+        echo -e "${amarillo}┌─────────────────────────────┐${reset}"
+        echo -e "${amarillo}│         MENÚ PRINCIPAL      │${reset}"
+        echo -e "${amarillo}├─────────────────────────────┤${reset}"
+
+        # Opciones principales
+        echo -e "${amarillo}│${reset}  ${verde}1${reset} 📝 Ingresar nuevas claves"
+        echo -e "${amarillo}│${reset}  ${verde}2${reset} 🔍 Mostrar claves actuales"
+        echo -e "${amarillo}│${reset}  ${verde}3${reset} 🔄 Reiniciar servicio SlowDNS"
+        echo -e "${amarillo}├─────────────────────────────┤${reset}"
+
+        # Opción de salir
+        echo -e "${amarillo}│${reset}  ${verde}0${reset} ❌ Salir"
+        echo -e "${amarillo}└─────────────────────────────┘${reset}"
+
+        echo -ne "\nSelecciona una opción: "
         read opcion
 
         case $opcion in
             1) ingresar_claves ;;
             2) mostrar_claves ;;
             3) reiniciar_slowdns ;;
-            4) ver_backups ;;
-            5) echo -e "${cyan}Saliendo...${reset}"; exit 0 ;;
+            0) echo -e "${cyan}Saliendo...${reset}"; exit 0 ;;
             *) echo -e "${rojo}Opción inválida, intenta de nuevo.${reset}"; sleep 1 ;;
         esac
     done
 }
 
-# =========================
-# Inicio del script
-# =========================
+# 🟢 Inicio del script
 menu_principal
