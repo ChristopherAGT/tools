@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================================
 #  KEY-MANAGER
-#  Interfaz organizada y profesional para administración de claves SlowDNS
+#  Interfaz organizada y profesional con panel fijo
 # ==========================================================
 
 set -euo pipefail
@@ -31,11 +31,9 @@ SERVICE_NAME="slowdns"
 # Banner Configuración SlowDNS
 # =========================
 show_slowdns_banner() {
-    ancho=$(tput cols)
-    line=$(printf '─%.0s' $(seq 1 $ancho))
-    echo -e "${cyan}${line}${reset}"
-    echo -e "${verde}${negrita}           CONFIGURADOR DE CLAVES SLOWDNS           ${reset}"
-    echo -e "${cyan}${line}${reset}\n"
+    echo -e "${cyan}==============================================================${reset}"
+    echo -e "${verde}${negrita}                CONFIGURADOR DE CLAVES SLOWDNS                ${reset}"
+    echo -e "${cyan}==============================================================${reset}\n"
 }
 
 # =========================
@@ -73,11 +71,9 @@ ingresar_claves() {
 # Función: Mostrar claves actuales
 # =========================
 mostrar_claves() {
-    ancho=$(tput cols)
-    line=$(printf '─%.0s' $(seq 1 $ancho))
-    echo -e "${cyan}${line}${reset}"
+    echo -e "${cyan}==============================================================${reset}"
     echo -e "${amarillo}${negrita}🔹 Claves actuales${reset}"
-    echo -e "${cyan}${line}${reset}\n"
+    echo -e "${cyan}==============================================================${reset}\n"
 
     echo -e "${negrita}Privada:${reset}"
     cat "${PRIVKEY_FILES[0]}"
@@ -107,19 +103,14 @@ reiniciar_slowdns() {
 }
 
 # =========================
-# Función: Menú principal adaptado y minimalista
+# Función: Menú principal con panel fijo
 # =========================
 menu_principal() {
     while true; do
         clear
-        ancho=$(tput cols)
-        line=$(printf '─%.0s' $(seq 1 $ancho))
-        title="KEY-MANAGER"
-
-        # Mostrar título centrado
-        echo -e "${cyan}${line}${reset}"
-        printf "%*s\n" $(( (${#title} + ancho) / 2 )) "$title"
-        echo -e "${cyan}${line}${reset}\n"
+        echo -e "${cyan}==============================================================${reset}"
+        echo -e "${verde}${negrita}                        KEY-MANAGER                        ${reset}"
+        echo -e "${cyan}==============================================================${reset}\n"
 
         # Opciones del menú
         echo -e "${verde}1${reset} 📝 Ingresar nuevas claves"
