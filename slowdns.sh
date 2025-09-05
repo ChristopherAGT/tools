@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================================
-#  Configurador de Claves para SlowDNS (ADMRufu)
-#  Autor: ChatGPT - versión mejorada y estructurada
+#  Configurador de Claves SlowDNS (ADMRufu)
+#  Autor: Christopher + ChatGPT
 # ==========================================================
 
 set -euo pipefail
@@ -13,81 +13,82 @@ azul="\e[94m"
 amarillo="\e[93m"
 reset="\e[0m"
 
-# 📂 Directorios donde se guardan las llaves
-KEY_PATHS=(
-    "/root/ADMRufu/slowdns"
-    "/etc/ADMRufu2.0/etc/slowdns"
+# 📂 Archivos de claves
+PRIVKEY_FILES=(
+    "/root/ADMRufu/slowdns/server.key"
+    "/etc/ADMRufu2.0/etc/slowdns/server.key"
+)
+
+PUBKEY_FILES=(
+    "/root/ADMRufu/slowdns/server.pub"
+    "/etc/ADMRufu2.0/etc/slowdns/server.pub"
 )
 
 SERVICE_NAME="slowdns"
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 clear
 echo -e "${azul}═══════════════════════════════════════════════════════${reset}"
-echo -e "        ${verde}CONFIGURADOR DE CLAVES SLOWDNS (ADMRufu)${reset}"
+echo -e "        ${verde}ASIGNADOR DE CLAVES SLOWDNS (ADMRufu)${reset}"
 echo -e "${azul}═══════════════════════════════════════════════════════${reset}\n"
 
 # 📝 Solicitar claves
-read -p "👉 Ingresa tu PRIVATE KEY (hex, 64 caracteres): " PRIV_HEX
-read -p "👉 Ingresa tu PUBLIC KEY (hex, 64 caracteres): " PUB_HEX
+read -p "👉 Ingresa la nueva CLAVE PRIVADA: " PRIVKEY
+read -p "👉 Ingresa la nueva CLAVE PÚBLICA: " PUBKEY
 
-# ✅ Validación
-if [[ ${#PRIV_HEX} -ne 64 || ! $PRIV_HEX =~ ^[0-9a-fA-F]+$ ]]; then
-    echo -e "${rojo}❌ Error: la clave privada debe tener 64 caracteres hexadecimales.${reset}"
-    exit 1
-fi
-if [[ ${#PUB_HEX} -ne 64 || ! $PUB_HEX =~ ^[0-9a-fA-F]+$ ]]; then
-    echo -e "${rojo}❌ Error: la clave pública debe tener 64 caracteres hexadecimales.${reset}"
+# ✅ Validar que no estén vacías
+if [[ -z "$PRIVKEY" || -z "$PUBKEY" ]]; then
+    echo -e "${rojo}❌ Error: Debes ingresar ambas claves.${reset}"
     exit 1
 fi
 
-# 🔒 Guardar claves en cada ruta
-for DIR in "${KEY_PATHS[@]}"; do
-    mkdir -p "$DIR"
+# 📦 Guardar claves con backup (timestamp)
+TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 
-    TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
-    [[ -f "$DIR/server.key" ]] && mv "$DIR/server.key" "$DIR/server.key.bak.$TIMESTAMP"
-    [[ -f "$DIR/server.pub" ]] && mv "$DIR/server.pub" "$DIR/server.pub.bak.$TIMESTAMP"
-
-    echo "$PRIV_HEX" | xxd -r -p > "$DIR/server.key"
-    echo "$PUB_HEX"  | xxd -r -p > "$DIR/server.pub"
-    chmod 600 "$DIR/server.key" "$DIR/server.pub"
-
-    echo -e "✅ Claves actualizadas en: ${amarillo}$DIR${reset}"
+for file in "${PRIVKEY_FILES[@]}"; do
+    if [[ -f "$file" ]]; then
+        cp "$file" "$file.bak.$TIMESTAMP"
+    fi
+    echo "$PRIVKEY" > "$file"
+    echo -e "✅ Clave privada actualizada en: ${amarillo}$file${reset}"
 done
 
-# 🔍 Verificar tamaño de archivos
-for DIR in "${KEY_PATHS[@]}"; do
-    if [[ $(stat -c '%s' "$DIR/server.key") -ne 32 || $(stat -c '%s' "$DIR/server.pub") -ne 32 ]]; then
-        echo -e "${rojo}❌ Error: los archivos generados no tienen 32 bytes. Verifica tus claves.${reset}"
+for file in "${PUBKEY_FILES[@]}"; do
+    if [[ -f "$file" ]]; then
+        cp "$file" "$file.bak.$TIMESTAMP"
+    fi
+    echo "$PUBKEY" > "$file"
+    echo -e "✅ Clave pública actualizada en: ${amarillo}$file${reset}"
+done
+
+# 🔍 Verificación de escritura
+for file in "${PRIVKEY_FILES[@]}" "${PUBKEY_FILES[@]}"; do
+    if [[ ! -s "$file" ]]; then
+        echo -e "${rojo}❌ Error: No se pudo escribir en $file${reset}"
         exit 1
     fi
 done
 
-echo -e "\n${verde}✔ Claves convertidas y guardadas correctamente.${reset}\n"
+echo -e "\n${verde}✔ Claves reemplazadas correctamente.${reset}\n"
 
 # ⚙️ Reinicio del servicio SlowDNS
-echo -e "${azul}Reiniciando servicio SlowDNS...${reset}"
+echo -e "${azul}Reiniciando SlowDNS...${reset}"
 
 if systemctl list-unit-files | grep -q "^${SERVICE_NAME}.service"; then
     systemctl daemon-reload
     systemctl restart "$SERVICE_NAME"
     sleep 1
-    systemctl is-active --quiet "$SERVICE_NAME" \
-        && echo -e "${verde}✅ SlowDNS reiniciado correctamente.${reset}" \
-        || echo -e "${rojo}❌ Error: no se pudo reiniciar SlowDNS.${reset}"
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        echo -e "${verde}✅ SlowDNS reiniciado correctamente con systemd.${reset}"
+    else
+        echo -e "${rojo}❌ Error: No se pudo reiniciar SlowDNS con systemd.${reset}"
+    fi
 else
-    echo -e "${amarillo}⚠ No existe un servicio systemd llamado '${SERVICE_NAME}'. Intentando método alternativo...${reset}"
+    echo -e "${amarillo}⚠ No se encontró servicio systemd. Reiniciando manualmente...${reset}"
     pkill -f dnstt-server || true
-    nohup dnstt-server -privkey-file "${KEY_PATHS[0]}/server.key" \
-                       -pubkey-file "${KEY_PATHS[0]}/server.pub" \
+    nohup dnstt-server -privkey-file "${PRIVKEY_FILES[0]}" \
+                       -pubkey-file "${PUBKEY_FILES[0]}" \
                        > /var/log/slowdns.log 2>&1 &
     echo -e "${verde}✅ SlowDNS relanzado manualmente en segundo plano.${reset}"
 fi
 
-# 📢 Mostrar clave pública en Base64 (para clientes)
-echo -e "\n${azul}=== Clave pública en base64 (para clientes) ===${reset}"
-base64 -w0 "${KEY_PATHS[0]}/server.pub"
-echo -e "\n${azul}===============================================${reset}"
-
-echo -e "\n${verde}🎉 SlowDNS listo con tus claves privadas y públicas nuevas.${reset}\n"
+echo -e "\n${verde}🎉 Proceso completado. Tus nuevas claves ya están activas.${reset}\n"
