@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================================
 #  KEY-MANAGER
-#  Menú interactivo minimalista y profesional
+#  Interfaz organizada y profesional para administración de claves SlowDNS
 # ==========================================================
 
 set -euo pipefail
@@ -20,7 +20,6 @@ PRIVKEY_FILES=(
     "/root/ADMRufu/slowdns/server.key"
     "/etc/ADMRufu2.0/etc/slowdns/server.key"
 )
-
 PUBKEY_FILES=(
     "/root/ADMRufu/slowdns/server.pub"
     "/etc/ADMRufu2.0/etc/slowdns/server.pub"
@@ -29,12 +28,14 @@ PUBKEY_FILES=(
 SERVICE_NAME="slowdns"
 
 # =========================
-# Función: Banner Configuración SlowDNS
+# Banner Configuración SlowDNS
 # =========================
 show_slowdns_banner() {
-    echo -e "${cyan}================================================${reset}"
-    echo -e "${verde}${negrita}      CONFIGURADOR DE CLAVES SLOWDNS      ${reset}"
-    echo -e "${cyan}================================================${reset}\n"
+    ancho=$(tput cols)
+    line=$(printf '─%.0s' $(seq 1 $ancho))
+    echo -e "${cyan}${line}${reset}"
+    echo -e "${verde}${negrita}           CONFIGURADOR DE CLAVES SLOWDNS           ${reset}"
+    echo -e "${cyan}${line}${reset}\n"
 }
 
 # =========================
@@ -42,7 +43,8 @@ show_slowdns_banner() {
 # =========================
 ingresar_claves() {
     show_slowdns_banner
-    echo -e "${amarillo}🔹 Ingresar nuevas claves${reset}"
+    echo -e "${amarillo}🔹 Ingresar nuevas claves${reset}\n"
+
     read -p "  👉 Clave PRIVADA: " PRIVKEY
     read -p "  👉 Clave PÚBLICA: " PUBKEY
 
@@ -52,16 +54,18 @@ ingresar_claves() {
         return
     fi
 
+    echo ""
+    # Guardar claves
     for file in "${PRIVKEY_FILES[@]}"; do
         echo "$PRIVKEY" > "$file"
         echo -e "  ✅ Privada actualizada en: ${cyan}$file${reset}"
     done
-
     for file in "${PUBKEY_FILES[@]}"; do
         echo "$PUBKEY" > "$file"
         echo -e "  ✅ Pública actualizada en: ${cyan}$file${reset}"
     done
 
+    # Reiniciar servicio y mostrar mensaje final
     reiniciar_slowdns "✔ Claves reemplazadas y servicio reiniciado correctamente."
 }
 
@@ -69,9 +73,12 @@ ingresar_claves() {
 # Función: Mostrar claves actuales
 # =========================
 mostrar_claves() {
-    echo -e "${cyan}================================================${reset}"
+    ancho=$(tput cols)
+    line=$(printf '─%.0s' $(seq 1 $ancho))
+    echo -e "${cyan}${line}${reset}"
     echo -e "${amarillo}${negrita}🔹 Claves actuales${reset}"
-    echo -e "${cyan}================================================${reset}\n"
+    echo -e "${cyan}${line}${reset}\n"
+
     echo -e "${negrita}Privada:${reset}"
     cat "${PRIVKEY_FILES[0]}"
     echo -e "\n${negrita}Pública:${reset}"
@@ -100,18 +107,21 @@ reiniciar_slowdns() {
 }
 
 # =========================
-# Función: Menú principal minimalista
+# Función: Menú principal adaptado y minimalista
 # =========================
 menu_principal() {
     while true; do
         clear
         ancho=$(tput cols)
-        title="KEY-MANAGER"
         line=$(printf '─%.0s' $(seq 1 $ancho))
+        title="KEY-MANAGER"
+
+        # Mostrar título centrado
         echo -e "${cyan}${line}${reset}"
         printf "%*s\n" $(( (${#title} + ancho) / 2 )) "$title"
         echo -e "${cyan}${line}${reset}\n"
 
+        # Opciones del menú
         echo -e "${verde}1${reset} 📝 Ingresar nuevas claves"
         echo -e "${verde}2${reset} 🔍 Mostrar claves actuales"
         echo -e "${verde}3${reset} 🔄 Reiniciar servicio SlowDNS"
@@ -130,5 +140,7 @@ menu_principal() {
     done
 }
 
-# 🟢 Inicio del script
+# =========================
+# Inicio del script
+# =========================
 menu_principal
