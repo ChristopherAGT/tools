@@ -62,10 +62,7 @@ ingresar_claves() {
         echo -e "  ✅ Pública actualizada en: ${cyan}$file${reset}"
     done
 
-    echo -e "\n${verde}✔ Claves reemplazadas correctamente.${reset}"
-    sleep 1
-
-    reiniciar_slowdns
+    reiniciar_slowdns "✔ Claves reemplazadas y servicio reiniciado correctamente."
 }
 
 # =========================
@@ -86,14 +83,16 @@ mostrar_claves() {
 # =========================
 # Función: Reiniciar SlowDNS
 # =========================
+# Parámetro opcional: mensaje final
 reiniciar_slowdns() {
+    mensaje_final=${1:-"🔹 Servicio SlowDNS reiniciado."}
     echo -e "\n${amarillo}🔹 Reiniciando servicio SlowDNS...${reset}"
     systemctl daemon-reload
     systemctl restart "$SERVICE_NAME"
     sleep 1
 
     if systemctl is-active --quiet "$SERVICE_NAME"; then
-        echo -e "  ${verde}✅ SlowDNS reiniciado correctamente.${reset}"
+        echo -e "  ${verde}✅ $mensaje_final${reset}"
     else
         echo -e "  ${rojo}❌ Error: No se pudo reiniciar SlowDNS.${reset}"
     fi
