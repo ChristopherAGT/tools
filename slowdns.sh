@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================================
-#  Configurador de Claves SlowDNS (ADMRufu)
-#  Menú interactivo estilo caja y diseño profesional
+#  KEY-MANAGER
+#  Menú interactivo minimalista y profesional
 # ==========================================================
 
 set -euo pipefail
@@ -29,20 +29,19 @@ PUBKEY_FILES=(
 SERVICE_NAME="slowdns"
 
 # =========================
-# Función: Banner principal
+# Función: Banner Configuración SlowDNS
 # =========================
-show_banner() {
-    clear
-    echo -e "${cyan}┌───────────────────────────────────────────────┐${reset}"
-    echo -e "${cyan}│${verde}${negrita}       CONFIGURADOR DE CLAVES SLOWDNS       ${cyan}│${reset}"
-    echo -e "${cyan}└───────────────────────────────────────────────┘${reset}\n"
+show_slowdns_banner() {
+    echo -e "${cyan}================================================${reset}"
+    echo -e "${verde}${negrita}      CONFIGURADOR DE CLAVES SLOWDNS      ${reset}"
+    echo -e "${cyan}================================================${reset}\n"
 }
 
 # =========================
 # Función: Ingresar nuevas claves
 # =========================
 ingresar_claves() {
-    show_banner
+    show_slowdns_banner
     echo -e "${amarillo}🔹 Ingresar nuevas claves${reset}"
     read -p "  👉 Clave PRIVADA: " PRIVKEY
     read -p "  👉 Clave PÚBLICA: " PUBKEY
@@ -73,8 +72,9 @@ ingresar_claves() {
 # Función: Mostrar claves actuales
 # =========================
 mostrar_claves() {
-    show_banner
-    echo -e "${amarillo}🔹 Claves actuales${reset}\n"
+    echo -e "${cyan}================================================${reset}"
+    echo -e "${amarillo}${negrita}🔹 Claves actuales${reset}"
+    echo -e "${cyan}================================================${reset}\n"
     echo -e "${negrita}Privada:${reset}"
     cat "${PRIVKEY_FILES[0]}"
     echo -e "\n${negrita}Pública:${reset}"
@@ -101,24 +101,22 @@ reiniciar_slowdns() {
 }
 
 # =========================
-# Función: Menú principal estilo caja
+# Función: Menú principal minimalista
 # =========================
 menu_principal() {
     while true; do
-        show_banner
-        echo -e "${amarillo}┌─────────────────────────────┐${reset}"
-        echo -e "${amarillo}│         MENÚ PRINCIPAL      │${reset}"
-        echo -e "${amarillo}├─────────────────────────────┤${reset}"
+        clear
+        ancho=$(tput cols)
+        title="KEY-MANAGER"
+        line=$(printf '─%.0s' $(seq 1 $ancho))
+        echo -e "${cyan}${line}${reset}"
+        printf "%*s\n" $(( (${#title} + ancho) / 2 )) "$title"
+        echo -e "${cyan}${line}${reset}\n"
 
-        # Opciones principales
-        echo -e "${amarillo}│${reset}  ${verde}1${reset} 📝 Ingresar nuevas claves"
-        echo -e "${amarillo}│${reset}  ${verde}2${reset} 🔍 Mostrar claves actuales"
-        echo -e "${amarillo}│${reset}  ${verde}3${reset} 🔄 Reiniciar servicio SlowDNS"
-        echo -e "${amarillo}├─────────────────────────────┤${reset}"
-
-        # Opción de salir
-        echo -e "${amarillo}│${reset}  ${verde}0${reset} ❌ Salir"
-        echo -e "${amarillo}└─────────────────────────────┘${reset}"
+        echo -e "${verde}1${reset} 📝 Ingresar nuevas claves"
+        echo -e "${verde}2${reset} 🔍 Mostrar claves actuales"
+        echo -e "${verde}3${reset} 🔄 Reiniciar servicio SlowDNS"
+        echo -e "${verde}0${reset} ❌ Salir"
 
         echo -ne "\nSelecciona una opción: "
         read opcion
