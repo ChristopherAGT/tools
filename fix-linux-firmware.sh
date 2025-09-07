@@ -52,7 +52,7 @@ echo -e "${reset}"
 pid=$!
 spinner $pid "Vaciando archivo de repositorios"
 
-# Paso 2: Insertar repositorios (sin mostrar en pantalla)
+# Paso 2: Insertar repositorios
 { 
 sudo tee /etc/apt/sources.list > /dev/null <<EOF
 ## Ubuntu 22.04
@@ -66,16 +66,10 @@ EOF
 pid=$!
 spinner $pid "Agregando nuevos repositorios"
 
-# Paso 3: Actualización del sistema (no interactivo, evita menús)
-{ 
-    export DEBIAN_FRONTEND=noninteractive
-    sudo -E apt-get update -y >>"$LOGFILE" 2>&1
-    sudo -E apt-get -y \
-        -o Dpkg::Options::="--force-confdef" \
-        -o Dpkg::Options::="--force-confold" upgrade >>"$LOGFILE" 2>&1
-} &
-pid=$!
-spinner $pid "Actualizando el sistema"
+# Paso 3: Actualización del sistema (MOSTRAR log en pantalla y guardarlo)
+echo -e "\n${amarillo}▶ Iniciando actualización del sistema...${reset}"
+sudo apt update -y 2>&1 | tee -a "$LOGFILE"
+sudo apt upgrade -y 2>&1 | tee -a "$LOGFILE"
 
 # Paso 6: Animación final elegante
 echo -e "${verde}${negrita}"
