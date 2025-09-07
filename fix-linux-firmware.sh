@@ -15,6 +15,16 @@ reset="\e[0m"
 # Archivo de log
 LOGFILE="/var/log/configurar_repos.log"
 
+# Función para esperar a que se liberen los locks de APT
+esperar_locks() {
+    while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+          fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
+          fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        echo -e "${amarillo}⚠️ Esperando a que se liberen los locks de apt...${reset}"
+        sleep 3
+    done
+}
+
 # Spinner
 spinner() {
     local pid=$1
@@ -39,20 +49,6 @@ spinner() {
     fi
 }
 
-# Manejo de locks antes de cualquier apt/dpkg
-esperar_locks() {
-    while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
-          fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
-          fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
-        echo -e "${amarillo}[!] Esperando que otros procesos de apt finalicen...${reset}"
-        sleep 5
-    done
-}
-
-# Reparar dpkg si está roto
-echo -e "${amarillo}▶ Comprobando estado de dpkg...${reset}"
-sudo dpkg --configure -a >>"$LOGFILE" 2>&1
-
 # Encabezado elegante
 clear
 echo -e "${azul}${negrita}"
@@ -67,7 +63,7 @@ pid=$!
 spinner $pid "Vaciando archivo de repositorios"
 
 # Paso 2: Insertar repositorios
-{
+{ 
 sudo tee /etc/apt/sources.list > /dev/null <<EOF
 ## Ubuntu 22.04
 
@@ -83,6 +79,7 @@ spinner $pid "Agregando nuevos repositorios"
 # Paso 3: Actualización del sistema
 echo -e "\n${amarillo}▶ Iniciando actualización del sistema...${reset}"
 
+# Update
 esperar_locks
 {
     sudo apt-get update -y >>"$LOGFILE" 2>&1
@@ -90,6 +87,7 @@ esperar_locks
 pid=$!
 spinner $pid "Actualizando lista de paquetes"
 
+# Upgrade
 esperar_locks
 {
     sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
