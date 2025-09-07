@@ -15,9 +15,6 @@ reset="\e[0m"
 # Archivo de log
 LOGFILE="/var/log/configurar_repos.log"
 
-# Forzar modo no interactivo en apt/dpkg
-export DEBIAN_FRONTEND=noninteractive
-
 # Spinner
 spinner() {
     local pid=$1
@@ -69,21 +66,29 @@ EOF
 pid=$!
 spinner $pid "Agregando nuevos repositorios"
 
-# Paso 3: Actualización del sistema (MOSTRAR log en pantalla y guardarlo)
+# Paso 3: Actualización del sistema
 echo -e "\n${amarillo}▶ Iniciando actualización del sistema...${reset}"
-sudo apt-get update -y 2>&1 | tee -a "$LOGFILE"
-sudo apt-get -o Dpkg::Options::="--force-confdef" \
-             -o Dpkg::Options::="--force-confold" \
-             -y upgrade 2>&1 | tee -a "$LOGFILE"
 
-# Paso 6: Animación final elegante
+{
+    yes "" | sudo apt update -y >>"$LOGFILE" 2>&1
+} &
+pid=$!
+spinner $pid "Actualizando lista de paquetes"
+
+{
+    yes "" | sudo apt upgrade -y >>"$LOGFILE" 2>&1
+} &
+pid=$!
+spinner $pid "Actualizando paquetes instalados"
+
+# Paso 4: Animación final elegante
 echo -e "${verde}${negrita}"
 echo "═══════════════════════════════════════════════"
 echo "        ✅  SISTEMA ACTUALIZADO CON ÉXITO ✅"
 echo "═══════════════════════════════════════════════"
 echo -e "${reset}"
 
-# Paso 7: Preguntar si reiniciar
+# Paso 5: Preguntar si reiniciar
 echo -ne "${amarillo}¿Deseas reiniciar el sistema ahora? (s/N): ${reset}"
 read respuesta
 if [[ "$respuesta" =~ ^[sS]$ ]]; then
