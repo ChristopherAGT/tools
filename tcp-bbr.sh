@@ -15,11 +15,12 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo -e "${amarillo}Verificando kernel...${reset}"
-KERNEL_VER=$(uname -r | awk -F- '{print $1}')
-if [[ $(echo "$KERNEL_VER >= 4.9" | bc) -eq 1 ]]; then
-    echo -e "${verde}Kernel compatible: $KERNEL_VER${reset}"
+# Tomar solo major.minor para la comparación
+KERNEL_VER=$(uname -r | awk -F. '{print $1"."$2}')
+if (( $(echo "$KERNEL_VER >= 4.9" | bc -l) )); then
+    echo -e "${verde}Kernel compatible: $(uname -r)${reset}"
 else
-    echo -e "${rojo}Kernel demasiado antiguo: $KERNEL_VER. Necesitas >= 4.9${reset}"
+    echo -e "${rojo}Kernel demasiado antiguo: $(uname -r). Necesitas >= 4.9${reset}"
     exit 1
 fi
 
@@ -42,8 +43,11 @@ net.core.rmem_max=134217728
 net.core.wmem_max=134217728
 net.ipv4.tcp_rmem=4096 87380 134217728
 net.ipv4.tcp_wmem=4096 65536 134217728
+net.core.somaxconn=65535
+net.ipv4.tcp_max_syn_backlog=65535
 EOF
 
+# Aplicar cambios
 sudo sysctl -p
 
 echo -e "${amarillo}Verificando BBR...${reset}"
