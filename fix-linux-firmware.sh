@@ -66,26 +66,18 @@ EOF
 pid=$!
 spinner $pid "Agregando nuevos repositorios"
 
-# Paso 3: Actualización del sistema (con recuperación automática)
-{
+# Paso 3: Actualización del sistema (no interactivo, evita menús)
+{ 
     export DEBIAN_FRONTEND=noninteractive
     sudo -E apt-get update -y >>"$LOGFILE" 2>&1
     sudo -E apt-get -y \
         -o Dpkg::Options::="--force-confdef" \
         -o Dpkg::Options::="--force-confold" upgrade >>"$LOGFILE" 2>&1
-} || {
-    echo -e "\n${amarillo}⚠️ La actualización se interrumpió, intentando recuperar...${reset}" | tee -a "$LOGFILE"
-
-    sudo dpkg --configure -a >>"$LOGFILE" 2>&1
-    sudo apt-get install -f -y >>"$LOGFILE" 2>&1
-    sudo apt-get update -y >>"$LOGFILE" 2>&1
-    sudo apt-get upgrade --fix-missing -y >>"$LOGFILE" 2>&1
 } &
 pid=$!
 spinner $pid "Actualizando el sistema"
 
 # Paso 6: Animación final elegante
-clear
 echo -e "${verde}${negrita}"
 echo "═══════════════════════════════════════════════"
 echo "        ✅  SISTEMA ACTUALIZADO CON ÉXITO ✅"
