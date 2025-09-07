@@ -39,6 +39,20 @@ spinner() {
     fi
 }
 
+# Manejo de locks antes de cualquier apt/dpkg
+esperar_locks() {
+    while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+          fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
+          fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
+        echo -e "${amarillo}[!] Esperando que otros procesos de apt finalicen...${reset}"
+        sleep 5
+    done
+}
+
+# Reparar dpkg si está roto
+echo -e "${amarillo}▶ Comprobando estado de dpkg...${reset}"
+sudo dpkg --configure -a >>"$LOGFILE" 2>&1
+
 # Encabezado elegante
 clear
 echo -e "${azul}${negrita}"
@@ -53,7 +67,7 @@ pid=$!
 spinner $pid "Vaciando archivo de repositorios"
 
 # Paso 2: Insertar repositorios
-{ 
+{
 sudo tee /etc/apt/sources.list > /dev/null <<EOF
 ## Ubuntu 22.04
 
@@ -69,14 +83,16 @@ spinner $pid "Agregando nuevos repositorios"
 # Paso 3: Actualización del sistema
 echo -e "\n${amarillo}▶ Iniciando actualización del sistema...${reset}"
 
+esperar_locks
 {
-    sudo apt update -y >>"$LOGFILE" 2>&1
+    sudo apt-get update -y >>"$LOGFILE" 2>&1
 } &
 pid=$!
 spinner $pid "Actualizando lista de paquetes"
 
+esperar_locks
 {
-    sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y \
+    sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
         -o Dpkg::Options::="--force-confdef" \
         -o Dpkg::Options::="--force-confold" >>"$LOGFILE" 2>&1
 } &
