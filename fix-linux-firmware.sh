@@ -15,6 +15,9 @@ reset="\e[0m"
 # Archivo de log
 LOGFILE="/var/log/configurar_repos.log"
 
+# Forzar modo no interactivo en apt/dpkg
+export DEBIAN_FRONTEND=noninteractive
+
 # Spinner
 spinner() {
     local pid=$1
@@ -68,8 +71,10 @@ spinner $pid "Agregando nuevos repositorios"
 
 # Paso 3: Actualización del sistema (MOSTRAR log en pantalla y guardarlo)
 echo -e "\n${amarillo}▶ Iniciando actualización del sistema...${reset}"
-sudo apt update -y 2>&1 | tee -a "$LOGFILE"
-sudo apt upgrade -y 2>&1 | tee -a "$LOGFILE"
+sudo apt-get update -y 2>&1 | tee -a "$LOGFILE"
+sudo apt-get -o Dpkg::Options::="--force-confdef" \
+             -o Dpkg::Options::="--force-confold" \
+             -y upgrade 2>&1 | tee -a "$LOGFILE"
 
 # Paso 6: Animación final elegante
 echo -e "${verde}${negrita}"
