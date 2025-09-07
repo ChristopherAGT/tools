@@ -39,7 +39,7 @@ if [ -z "$nuevo" ]; then
 fi
 
 # Encerrar el nombre en ⚡️
-final="⚡️ $nuevo ⚡️"
+final="⚡️$nuevo ⚡️"
 
 # Guardar nuevo reseller
 echo "$final" > /etc/reseller
