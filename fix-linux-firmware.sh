@@ -70,13 +70,15 @@ spinner $pid "Agregando nuevos repositorios"
 echo -e "\n${amarillo}▶ Iniciando actualización del sistema...${reset}"
 
 {
-    yes "" | sudo apt update -y >>"$LOGFILE" 2>&1
+    sudo apt update -y >>"$LOGFILE" 2>&1
 } &
 pid=$!
 spinner $pid "Actualizando lista de paquetes"
 
 {
-    yes "" | sudo apt upgrade -y >>"$LOGFILE" 2>&1
+    sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold" >>"$LOGFILE" 2>&1
 } &
 pid=$!
 spinner $pid "Actualizando paquetes instalados"
