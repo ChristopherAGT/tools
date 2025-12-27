@@ -19,10 +19,10 @@ negrita="\e[1m"
 
 # 📂 Archivos de claves para TTDNS
 PRIVKEY_FILES=(
-    "/root/ADMRufu/slowdns/server.key"
+    "/etc/ADMRufu/etc/ttdns/privkey.key"
 )
 PUBKEY_FILES=(
-    "/root/ADMRufu/slowdns/server.pub"
+    "/etc/ADMRufu/etc/ttdns/pubkey.pub"
 )
 
 SERVICE_NAME="slowdns"  # Mantener el mismo nombre del servicio o cambiar si aplica
