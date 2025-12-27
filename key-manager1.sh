@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================================
 #  KEY-MANAGER TTDNS - Configurador de Claves (ADMRufu)
-#  Autor: Christopher + ChatGPT
+#  Autor: ChristopherAGT
 #  Interfaz profesional con panel fijo y colores intuitivos
 # ==========================================================
 
@@ -19,10 +19,10 @@ negrita="\e[1m"
 
 # 📂 Archivos de claves para TTDNS
 PRIVKEY_FILES=(
-    "/etc/ADMRufu/etc/ttdns/privkey.key"
+    "/root/ADMRufu/slowdns/server.key"
 )
 PUBKEY_FILES=(
-    "/etc/ADMRufu/etc/ttdns/pubkey.pub"
+    "/root/ADMRufu/slowdns/server.pub"
 )
 
 SERVICE_NAME="slowdns"  # Mantener el mismo nombre del servicio o cambiar si aplica
