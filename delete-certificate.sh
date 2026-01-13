@@ -6,78 +6,82 @@
 #  Autor: Christopher
 # ==================================================
 
+# ---------------- COLORES ----------------
+RED="\e[31m"
+GREEN="\e[32m"
+YELLOW="\e[33m"
+BLUE="\e[34m"
+CYAN="\e[36m"
+BOLD="\e[1m"
+RESET="\e[0m"
+
 ACME_BIN="/root/.acme.sh/acme.sh"
 ACME_DIR="/root/.acme.sh"
 
 clear
-echo "================================================"
-echo "   HERRAMIENTA PARA ELIMINAR CERTIFICADOS SSL"
-echo "                (acme.sh)"
-echo "================================================"
+echo -e "${CYAN}${BOLD}================================================${RESET}"
+echo -e "${BLUE}${BOLD}   HERRAMIENTA PARA ELIMINAR CERTIFICADOS SSL${RESET}"
+echo -e "${BLUE}${BOLD}                (acme.sh)${RESET}"
+echo -e "${CYAN}${BOLD}================================================${RESET}"
 echo
 
-read -rp "👉 Ingrese el dominio del certificado a eliminar (ej: ejemplo.com): " DOMINIO
+# ---------------- INGRESO DEL DOMINIO ----------------
+read -rp "$(echo -e "${YELLOW}👉 Ingrese el dominio del certificado a eliminar (ej: ejemplo.com): ${RESET}")" DOMINIO
 
 # ---------------- VALIDACIÓN ----------------
 if [[ -z "$DOMINIO" ]]; then
-  echo
-  echo "❌ Error: El dominio no puede estar vacío."
+  echo -e "\n${RED}❌ Error: El dominio no puede estar vacío.${RESET}"
   exit 1
 fi
 
 if [[ ! "$DOMINIO" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
-  echo
-  echo "❌ Error: El dominio ingresado no es válido."
+  echo -e "\n${RED}❌ Error: El dominio ingresado no es válido.${RESET}"
   exit 1
 fi
 
-echo
-echo "🔍 Verificando certificado para el dominio: $DOMINIO"
-echo
+echo -e "\n${CYAN}🔍 Verificando certificado para el dominio: ${BOLD}$DOMINIO${RESET}\n"
 
 CERT_EXISTE=$($ACME_BIN --list 2>/dev/null | grep -w "$DOMINIO")
 
 if [[ -z "$CERT_EXISTE" ]]; then
-  echo "⚠️  No existe ningún certificado emitido para: $DOMINIO"
-  echo "No hay nada que eliminar."
+  echo -e "${YELLOW}⚠️  No existe ningún certificado emitido para: $DOMINIO${RESET}"
+  echo -e "${YELLOW}No hay nada que eliminar.${RESET}"
   exit 0
 fi
 
 # ---------------- CONFIRMACIÓN ----------------
 echo
-read -rp "⚠️  ¿Está seguro que desea eliminar el certificado SSL para '$DOMINIO'? (s/N): " CONFIRMAR
+read -rp "$(echo -e "${RED}⚠️  ¿Está seguro que desea eliminar el certificado SSL para '$DOMINIO'? (s/N): ${RESET}")" CONFIRMAR
 
 if [[ ! "$CONFIRMAR" =~ ^[sS]$ ]]; then
-  echo
-  echo "❌ Operación cancelada por el usuario."
+  echo -e "\n${RED}❌ Operación cancelada por el usuario.${RESET}"
   exit 0
 fi
 
 # ---------------- ELIMINACIÓN ----------------
-echo
-echo "🧹 Eliminando certificado del gestor acme.sh..."
+echo -e "\n${CYAN}🧹 Eliminando certificado del gestor acme.sh...${RESET}"
 $ACME_BIN --remove -d "$DOMINIO"
 
 if [[ -d "$ACME_DIR/${DOMINIO}_ecc" ]]; then
-  echo "🗑️  Eliminando archivos del certificado ECC..."
+  echo -e "${CYAN}🗑️  Eliminando archivos del certificado ECC...${RESET}"
   rm -rf "$ACME_DIR/${DOMINIO}_ecc"
 fi
 
-echo "🗑️  Limpiando archivos residuales..."
+echo -e "${CYAN}🗑️  Limpiando archivos residuales...${RESET}"
 rm -rf "$ACME_DIR/${DOMINIO}"*
 
 # ---------------- VERIFICACIÓN FINAL ----------------
 echo
-echo "🔎 Verificando eliminación completa..."
+echo -e "${BLUE}🔎 Verificando eliminación completa...${RESET}"
 
 if ls "$ACME_DIR" | grep -q "$DOMINIO"; then
-  echo "⚠️  Advertencia: Aún existen archivos relacionados al dominio."
-  echo "Revise manualmente el directorio $ACME_DIR"
+  echo -e "${YELLOW}⚠️  Advertencia: Aún existen archivos relacionados al dominio.${RESET}"
+  echo -e "${YELLOW}Revise manualmente el directorio $ACME_DIR${RESET}"
 else
-  echo "✅ Verificación exitosa: El certificado fue eliminado completamente."
+  echo -e "${GREEN}✅ Verificación exitosa: El certificado fue eliminado completamente.${RESET}"
 fi
 
 echo
-echo "================================================"
-echo "           PROCESO FINALIZADO"
-echo "================================================"
+echo -e "${CYAN}${BOLD}================================================${RESET}"
+echo -e "${GREEN}${BOLD}           PROCESO FINALIZADO${RESET}"
+echo -e "${CYAN}${BOLD}================================================${RESET}"
