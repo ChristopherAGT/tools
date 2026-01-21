@@ -2,12 +2,11 @@
 # ==========================================================
 #  KEY-MANAGER SLOWDNS - VPS-MX
 #  Autor: ChristopherAGT
-#  Gestor seguro de claves SlowDNS
 # ==========================================================
 
 set -euo pipefail
 
-# 🎨 Colores
+# Colores
 verde="\e[92m"
 rojo="\e[91m"
 amarillo="\e[93m"
@@ -17,94 +16,99 @@ azul="\e[94m"
 reset="\e[0m"
 negrita="\e[1m"
 
-# 📂 Rutas reales VPS-MX
-PRIVKEY_FILES=(
-    "/etc/VPS-MX/Slow/Key/server.key"
-)
-PUBKEY_FILES=(
-    "/etc/VPS-MX/Slow/Key/server.pub"
-)
+# Rutas
+PRIVKEY="/etc/VPS-MX/Slow/Key/server.key"
+PUBKEY="/etc/VPS-MX/Slow/Key/server.pub"
+SERVICE="slowdns"
+WIDTH=47
 
-SERVICE_NAME="slowdns"
-PANEL_WIDTH=47
-
-# =========================
-# Banner
-# =========================
-show_banner() {
+banner() {
     echo -e "${cyan}┌───────────────────────────────────────────────┐${reset}"
     title="KEY-MANAGER SLOWDNS"
-    padding_left=$(( (PANEL_WIDTH - 2 - ${#title}) / 2 ))
-    padding_right=$(( PANEL_WIDTH - 2 - padding_left - ${#title} ))
-    printf "${cyan}│%*s${negrita}${verde}%s${cyan}%*s│${reset}\n" \
-        $padding_left "" "$title" $padding_right ""
+    padL=$(( (WIDTH - 2 - ${#title}) / 2 ))
+    padR=$(( WIDTH - 2 - padL - ${#title} ))
+    printf "${cyan}│%*s${negrita}${verde}%s${cyan}%*s│${reset}\n" "$padL" "" "$title" "$padR" ""
     echo -e "${cyan}└───────────────────────────────────────────────┘${reset}\n"
 }
 
-# =========================
-# Validar archivos
-# =========================
-validar_rutas() {
-    for f in "${PRIVKEY_FILES[@]}" "${PUBKEY_FILES[@]}"; do
-        if [[ ! -f "$f" ]]; then
-            echo -e "${rojo}❌ No existe el archivo: $f${reset}"
-            exit 1
-        fi
-    done
+check_files() {
+    [[ -f "$PRIVKEY" && -f "$PUBKEY" ]] || {
+        echo -e "${rojo}❌ Archivos de claves no encontrados.${reset}"
+        exit 1
+    }
 }
 
-# =========================
-# Ingresar nuevas claves
-# =========================
-ingresar_claves() {
+set_keys() {
     clear
-    show_banner
-    validar_rutas
+    banner
+    check_files
 
-    echo -e "${amarillo}⚠️ ADVERTENCIA${reset}"
-    echo -e "Cambiar estas claves desconectará TODOS los clientes.\n"
+    echo -e "${amarillo}⚠️ Cambiar claves desconecta todos los clientes${reset}\n"
 
-    read -p "👉 Clave PRIVADA: " PRIVKEY
-    read -p "👉 Clave PÚBLICA: " PUBKEY
+    read -r -p "👉 Clave PRIVADA: " priv
+    read -r -p "👉 Clave PÚBLICA: " pub
 
-    if [[ -z "$PRIVKEY" || -z "$PUBKEY" ]]; then
-        echo -e "${rojo}❌ Ambas claves son obligatorias.${reset}"
+    [[ -z "$priv" || -z "$pub" ]] && {
+        echo -e "${rojo}❌ Claves vacías.${reset}"
         sleep 2
         return
-    fi
+    }
 
-    echo -e "\n${amarillo}Guardando claves...${reset}"
+    echo "$priv" > "$PRIVKEY"
+    echo "$pub"  > "$PUBKEY"
 
-    for file in "${PRIVKEY_FILES[@]}"; do
-        echo "$PRIVKEY" > "$file"
-        chmod 600 "$file"
-        echo -e "${verde}✔ Privada escrita en:${cyan} $file${reset}"
-    done
+    chmod 600 "$PRIVKEY"
+    chmod 644 "$PUBKEY"
 
-    for file in "${PUBKEY_FILES[@]}"; do
-        echo "$PUBKEY" > "$file"
-        chmod 644 "$file"
-        echo -e "${verde}✔ Pública escrita en:${cyan} $file${reset}"
-    done
+    systemctl restart "$SERVICE" || true
 
-    echo -e "\n${amarillo}Reiniciando SlowDNS...${reset}"
-    systemctl daemon-reexec
-    systemctl restart "$SERVICE_NAME" || true
-
-    sleep 1
-    if systemctl is-active --quiet "$SERVICE_NAME"; then
-        echo -e "${verde}✅ SlowDNS reiniciado correctamente.${reset}"
-    else
-        echo -e "${rojo}❌ SlowDNS no pudo iniciarse.${reset}"
-    fi
-
-    read -p "Presiona Enter para continuar..."
+    echo -e "${verde}✅ Claves aplicadas.${reset}"
+    read -r -p "Enter para continuar..."
 }
 
-# =========================
-# Mostrar claves
-# =========================
-mostrar_claves() {
+show_keys() {
     clear
-    show_banner
-    validar
+    banner
+    check_files
+
+    echo -e "${magenta}Privada:${reset}"
+    cat "$PRIVKEY"
+    echo -e "\n${magenta}Pública:${reset}"
+    cat "$PUBKEY"
+
+    echo
+    read -r -p "Enter para continuar..."
+}
+
+restart_srv() {
+    clear
+    banner
+    systemctl restart "$SERVICE" || true
+    systemctl is-active --quiet "$SERVICE" \
+        && echo -e "${verde}✅ Servicio activo${reset}" \
+        || echo -e "${rojo}❌ Servicio detenido${reset}"
+    read -r -p "Enter para continuar..."
+}
+
+menu() {
+    while true; do
+        clear
+        banner
+        echo -e "${magenta}1${reset} 📝 Cambiar claves"
+        echo -e "${magenta}2${reset} 🔍 Mostrar claves"
+        echo -e "${magenta}3${reset} 🔄 Reiniciar SlowDNS"
+        echo -e "${magenta}0${reset} ❌ Salir"
+        echo -e "${azul}───────────────────────────────────────────────${reset}"
+        read -r -p "Opción: " opt
+
+        case "${opt:-}" in
+            1) set_keys ;;
+            2) show_keys ;;
+            3) restart_srv ;;
+            0) exit 0 ;;
+            *) echo -e "${rojo}Opción inválida${reset}"; sleep 1 ;;
+        esac
+    done
+}
+
+menu
