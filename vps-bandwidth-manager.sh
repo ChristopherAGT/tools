@@ -1,4 +1,3 @@
-
 #!/bin/bash
 # ============================================================
 # ADMRufu 2.0 | Gestor de Ancho de Banda
@@ -41,11 +40,15 @@ ancho_visual() {
     local texto="$1"
     local medida
 
+    # Retirar colores ANSI antes de medir.
     texto=$(printf '%s' "$texto" |
         sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g')
 
+    # wc -L calcula el ancho de la linea segun la configuracion
+    # regional disponible en el sistema.
     medida=$(printf '%s' "$texto" | wc -L 2>/dev/null)
     medida=${medida//[!0-9]/}
+
     printf '%s' "${medida:-0}"
 }
 
@@ -95,7 +98,7 @@ centrar() {
     visible=$(ancho_visual "$texto")
 
     if ((visible > INTERIOR)); then
-        texto="${texto:0:$INTERIOR}"
+        texto="${texto:0:INTERIOR}"
         visible=$(ancho_visual "$texto")
     fi
 
@@ -117,7 +120,11 @@ panel_abrir() {
     local visible guiones
 
     visible=$(ancho_visual "$titulo")
+
+    # Ancho total: esquina + prefijo + titulo + espacio +
+    # guiones + esquina final.
     guiones=$((ANCHO - visible - 5))
+
     ((guiones < 1)) && guiones=1
 
     printf '%b' "${cyan}${negrita}┌─ ${titulo} "
@@ -146,7 +153,9 @@ panel_fila() {
         "${cyan}│${neutro}"
 }
 
-# Fila de estado: solo colorea el texto del estado.
+# Fila de estado: solo colorea el estado.
+# Se mantienen etiquetas sin emojis dentro del marco para
+# evitar diferencias de ancho entre terminales.
 panel_fila_estado() {
     local etiqueta="$1"
     local estado="$2"
@@ -202,7 +211,7 @@ banner() {
     printf '\n'
 
     borde_superior
-    centrar "ADMRUFU 2.0"
+    centrar "Bandwidth Manager"
     separador
     centrar "GESTOR DE ANCHO DE BANDA"
     centrar "Control de velocidad de red"
@@ -221,6 +230,7 @@ fi
 # ── Instalar dependencias ───────────────────────────────────
 instalar_dependencias() {
     local faltantes=()
+    local paquetes=()
     local p
 
     titulo_seccion "🔍 VERIFICACION DE DEPENDENCIAS"
@@ -237,8 +247,6 @@ instalar_dependencias() {
         return 0
     fi
 
-    # En Debian/Ubuntu, tc e ip pertenecen a iproute2.
-    local paquetes=()
     for p in "${faltantes[@]}"; do
         case "$p" in
             tc|ip)
@@ -322,7 +330,7 @@ aplicar_limite() {
         return 1
     fi
 
-    # Advertencia: esta operacion reemplaza la qdisc root existente.
+    # Esta operacion reemplaza la qdisc root existente.
     tc qdisc del dev "$INTERFAZ" root 2>/dev/null || true
 
     if ! tc qdisc add dev "$INTERFAZ" root handle 1: htb default 30 r2q 5; then
@@ -382,7 +390,7 @@ fi
 
 source "\$CONFIG"
 
-if [[ -z "\${INTERFAZ:-}" ]] || [[ ! "\${LIMITE:-}" =~ ^[0-9]+$ ]]; then
+if [[ -z "\${INTERFAZ:-}" ]] || [[ ! "\${LIMITE:-}" =~ ^[0-9]+$ ]] || ((LIMITE <= 0)); then
     exit 1
 fi
 
@@ -407,10 +415,8 @@ agregar_crontab() {
 
     temporal=$(mktemp) || return 1
 
-    if ! crontab -l 2>/dev/null |
-        grep -Fv -- "$SCRIPT_APLICADOR" > "$temporal"; then
-        :
-    fi
+    crontab -l 2>/dev/null |
+        grep -Fv -- "$SCRIPT_APLICADOR" > "$temporal" || true
 
     printf '@reboot %s\n' "$SCRIPT_APLICADOR" >> "$temporal"
 
@@ -421,6 +427,7 @@ agregar_crontab() {
     fi
 
     rm -f "$temporal"
+    return 0
 }
 
 # ── Eliminar limitacion ─────────────────────────────────────
@@ -539,23 +546,23 @@ prueba_red() {
     panel_abrir "RESUMEN DE CONECTIVIDAD"
 
     if ((recibidos > 0)); then
-        panel_fila "🟢 Estado: Conexion disponible"
+        panel_fila "Estado: Conexion disponible"
     else
-        panel_fila "🔴 Estado: Sin respuesta"
+        panel_fila "Estado: Sin respuesta"
     fi
 
-    panel_fila "🌐 Destino: $host"
-    panel_fila "📤 Paquetes enviados: $enviados"
-    panel_fila "📥 Paquetes recibidos: $recibidos"
-    panel_fila "📉 Perdida de paquetes: ${perdidos}%"
+    panel_fila "Destino: $host"
+    panel_fila "Paquetes enviados: $enviados"
+    panel_fila "Paquetes recibidos: $recibidos"
+    panel_fila "Perdida de paquetes: ${perdidos}%"
 
     if [[ -n "$latencia_avg" ]]; then
-        panel_fila "⚡ Latencia promedio: ${latencia_avg} ms"
-        panel_fila "⬇ Latencia minima: ${latencia_min} ms"
-        panel_fila "⬆ Latencia maxima: ${latencia_max} ms"
-        panel_fila "📊 Variacion (mdev): ${latencia_mdev} ms"
+        panel_fila "Latencia promedio: ${latencia_avg} ms"
+        panel_fila "Latencia minima: ${latencia_min} ms"
+        panel_fila "Latencia maxima: ${latencia_max} ms"
+        panel_fila "Variacion (mdev): ${latencia_mdev} ms"
     else
-        panel_fila "⚠ Latencia: No disponible"
+        panel_fila "Latencia: No disponible"
     fi
 
     panel_cerrar
@@ -574,7 +581,7 @@ prueba_red() {
     fi
 }
 
-# ── Ver estado actual ──────────────────────────────────────
+# ── Ver estado actual ───────────────────────────────────────
 ver_estado() {
     titulo_seccion "📊 ESTADO ACTUAL"
 
@@ -585,19 +592,23 @@ ver_estado() {
             cat "$STATUS"
         fi
     else
-        printf '%b\n' "${rojo}⚙️ Estado: No Configurado${neutro}"
+        printf '%b\n' "${rojo}Estado: No Configurado${neutro}"
     fi
 
     if [[ -f "$CONFIG" ]]; then
         printf '\n%b\n' "${cyan}Configuracion guardada:${neutro}"
         cat "$CONFIG"
-    fi
 
-    if [[ -n "${INTERFAZ:-}" ]] &&
-        ip link show "$INTERFAZ" >/dev/null 2>&1; then
-        printf '\n%b\n' "${cyan}Disciplinas de trafico actuales:${neutro}"
-        tc -s qdisc show dev "$INTERFAZ" 2>/dev/null
-        tc -s class show dev "$INTERFAZ" 2>/dev/null
+        INTERFAZ=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
+        INTERFAZ=${INTERFAZ#\"}
+        INTERFAZ=${INTERFAZ%\"}
+
+        if [[ -n "$INTERFAZ" ]] &&
+            ip link show "$INTERFAZ" >/dev/null 2>&1; then
+            printf '\n%b\n' "${cyan}Disciplinas de trafico actuales:${neutro}"
+            tc -s qdisc show dev "$INTERFAZ" 2>/dev/null
+            tc -s class show dev "$INTERFAZ" 2>/dev/null
+        fi
     fi
 }
 
@@ -636,18 +647,18 @@ menu() {
                 [[ -n "$interfaz_actual" ]] &&
                 ip link show "$interfaz_actual" >/dev/null 2>&1; then
 
-                panel_fila_estado "⚙️ Estado: " "Configurado" "$verde"
-                panel_fila "🌐 Interfaz: ${interfaz_actual}"
-                panel_fila "🚀 Limite: ${limite_actual} Mbps"
+                panel_fila_estado "Estado: " "Configurado" "$verde"
+                panel_fila "Interfaz: ${interfaz_actual}"
+                panel_fila "Limite: ${limite_actual} Mbps"
             else
-                panel_fila_estado "⚙️ Estado: " "No Configurado" "$rojo"
-                panel_fila "🌐 Interfaz: No disponible"
-                panel_fila "🚀 Limite: No establecido"
+                panel_fila_estado "Estado: " "No Configurado" "$rojo"
+                panel_fila "Interfaz: No disponible"
+                panel_fila "Limite: No establecido"
             fi
         else
-            panel_fila_estado "⚙️ Estado: " "No Configurado" "$rojo"
-            panel_fila "🌐 Interfaz: Pendiente"
-            panel_fila "🚀 Limite: No establecido"
+            panel_fila_estado "Estado: " "No Configurado" "$rojo"
+            panel_fila "Interfaz: Pendiente"
+            panel_fila "Limite: No establecido"
         fi
 
         panel_cerrar
@@ -690,11 +701,6 @@ menu() {
                 ;;
 
             2)
-                if [[ -f "$CONFIG" ]]; then
-                    INTERFAZ=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
-                    INTERFAZ=${INTERFAZ#\"}
-                    INTERFAZ=${INTERFAZ%\"}
-                fi
                 ver_estado
                 pausa
                 ;;
