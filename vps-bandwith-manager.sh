@@ -256,9 +256,7 @@ solicitar_limite() {
 
 # ── Aplicar limite con tc ────────────────────────────────────
 aplicar_limite() {
-    if ! tc qdisc del dev "$INTERFAZ" root 2>/dev/null; then
-        :
-    fi
+    tc qdisc del dev "$INTERFAZ" root 2>/dev/null || true
 
     if ! tc qdisc add dev "$INTERFAZ" root handle 1: htb default 30 r2q 5; then
         mensaje_error "No se pudo crear la disciplina HTB en $INTERFAZ."
@@ -329,7 +327,6 @@ agregar_crontab() {
 # ── Eliminar limitacion ──────────────────────────────────────
 eliminar_limite() {
     if [[ -f "$CONFIG" ]]; then
-        # Leer la interfaz sin ejecutar comandos arbitrarios del archivo.
         INTERFAZ=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
         INTERFAZ=${INTERFAZ#\"}
         INTERFAZ=${INTERFAZ%\"}
@@ -388,15 +385,81 @@ aplicar_temporal() {
     mensaje_ok "Limite temporal finalizado."
 }
 
-# ── Prueba de red ────────────────────────────────────────────
+# ── Prueba de red con resumen visual ─────────────────────────
 prueba_red() {
-    titulo_seccion "📡 PRUEBA DE CONECTIVIDAD"
-    printf '%b\n\n' "${gris}Enviando 4 paquetes a google.com...${neutro}"
+    local salida codigo
+    local enviados recibidos perdidos
+    local latencia_min latencia_avg latencia_max latencia_mdev
+    local host="google.com"
 
-    if command -v ping >/dev/null 2>&1; then
-        ping -c 4 google.com
-    else
+    titulo_seccion "📡 PRUEBA DE CONECTIVIDAD"
+    printf '%b\n' "${gris}Destino: ${blanco}${host}${neutro}"
+    printf '%b\n' "${gris}Enviando 4 paquetes ICMP...${neutro}"
+
+    if ! command -v ping >/dev/null 2>&1; then
         mensaje_error "El comando ping no esta instalado."
+        return 1
+    fi
+
+    salida=$(ping -c 4 -W 3 "$host" 2>&1)
+    codigo=$?
+
+    enviados=$(printf '%s\n' "$salida" |
+        sed -nE 's/.* ([0-9]+) packets transmitted.*/\1/p')
+    recibidos=$(printf '%s\n' "$salida" |
+        sed -nE 's/.* ([0-9]+) received.*/\1/p')
+    perdidos=$(printf '%s\n' "$salida" |
+        sed -nE 's/.* ([0-9]+)% packet loss.*/\1/p')
+
+    latencia_min=$(printf '%s\n' "$salida" |
+        sed -nE 's/.* = ([0-9.]+)\/([0-9.]+)\/([0-9.]+)\/([0-9.]+) ms/\1/p')
+    latencia_avg=$(printf '%s\n' "$salida" |
+        sed -nE 's/.* = ([0-9.]+)\/([0-9.]+)\/([0-9.]+)\/([0-9.]+) ms/\2/p')
+    latencia_max=$(printf '%s\n' "$salida" |
+        sed -nE 's/.* = ([0-9.]+)\/([0-9.]+)\/([0-9.]+)\/([0-9.]+) ms/\3/p')
+    latencia_mdev=$(printf '%s\n' "$salida" |
+        sed -nE 's/.* = ([0-9.]+)\/([0-9.]+)\/([0-9.]+)\/([0-9.]+) ms/\4/p')
+
+    enviados=${enviados:-0}
+    recibidos=${recibidos:-0}
+    perdidos=${perdidos:-100}
+
+    printf '\n'
+    panel_abrir "RESUMEN DE CONECTIVIDAD"
+
+    if ((recibidos > 0)); then
+        panel_fila "🟢 Estado: Conexion disponible"
+    else
+        panel_fila "🔴 Estado: Sin respuesta"
+    fi
+
+    panel_fila "🌐 Destino: $host"
+    panel_fila "📤 Paquetes enviados: $enviados"
+    panel_fila "📥 Paquetes recibidos: $recibidos"
+    panel_fila "📉 Perdida de paquetes: ${perdidos}%"
+
+    if [[ -n "$latencia_avg" ]]; then
+        panel_fila "⚡ Latencia promedio: ${latencia_avg} ms"
+        panel_fila "⬇ Latencia minima: ${latencia_min} ms"
+        panel_fila "⬆ Latencia maxima: ${latencia_max} ms"
+        panel_fila "📊 Variacion (mdev): ${latencia_mdev} ms"
+    else
+        panel_fila "⚠ Latencia: No disponible"
+    fi
+
+    panel_cerrar
+    printf '\n'
+
+    if ((recibidos == 0)); then
+        printf '%b\n' "${rojo}✘ No se recibieron respuestas. Revisa la conectividad o el filtrado ICMP.${neutro}"
+    elif ((perdidos > 0)); then
+        printf '%b\n' "${amarillo}⚠ Hay perdida de paquetes. Conviene repetir la prueba.${neutro}"
+    else
+        printf '%b\n' "${verde}✔ Conexion estable durante esta prueba.${neutro}"
+    fi
+
+    if ((codigo != 0)); then
+        printf '%b\n' "${gris}Nota: ping termino con codigo $codigo.${neutro}"
     fi
 }
 
@@ -476,16 +539,32 @@ menu() {
 
         if [[ -f "$CONFIG" ]]; then
             local interfaz_actual limite_actual
+
             interfaz_actual=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
             limite_actual=$(sed -n 's/^LIMITE=//p' "$CONFIG" | head -n1)
 
-            panel_fila "🟢 Estado: configuracion guardada"
-            panel_fila "🌐 Interfaz: ${interfaz_actual:-Desconocida}"
-            panel_fila "🚀 Limite: ${limite_actual:-?} Mbps"
+            interfaz_actual=${interfaz_actual#\"}
+            interfaz_actual=${interfaz_actual%\"}
+            limite_actual=${limite_actual#\"}
+            limite_actual=${limite_actual%\"}
+
+            if [[ "$limite_actual" =~ ^[0-9]+$ ]] &&
+                ((10#$limite_actual > 0)) &&
+                [[ -n "$interfaz_actual" ]] &&
+                ip link show "$interfaz_actual" >/dev/null 2>&1; then
+
+                panel_fila "${verde}🟢 Estado: Limite establecido${neutro}"
+                panel_fila "🌐 Interfaz: ${interfaz_actual}"
+                panel_fila "🚀 Limite: ${limite_actual} Mbps"
+            else
+                panel_fila "${rojo}🔴 Estado: Limite no establecido${neutro}"
+                panel_fila "🌐 Interfaz: No disponible"
+                panel_fila "🚀 Limite: No establecido"
+            fi
         else
-            panel_fila "⚪ Estado: sin configurar"
-            panel_fila "🌐 Interfaz: pendiente"
-            panel_fila "🚀 Limite: no establecido"
+            panel_fila "${rojo}🔴 Estado: Limite no establecido${neutro}"
+            panel_fila "🌐 Interfaz: Pendiente"
+            panel_fila "🚀 Limite: No establecido"
         fi
 
         panel_cerrar
@@ -538,6 +617,10 @@ menu() {
                     INTERFAZ=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
                     INTERFAZ=${INTERFAZ#\"}
                     INTERFAZ=${INTERFAZ%\"}
+
+                    LIMITE=$(sed -n 's/^LIMITE=//p' "$CONFIG" | head -n1)
+                    LIMITE=${LIMITE#\"}
+                    LIMITE=${LIMITE%\"}
 
                     if solicitar_limite && aplicar_limite && guardar_config; then
                         crear_script_aplicador
