@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# ADMRufu 2.0 | Gestor de Firewalld
+# Oracle | Gestor de Firewalld
 # Apertura de puertos TCP/UDP
 # Autor: ChristopherAGT | Guatemala
 # ============================================================
@@ -35,7 +35,7 @@ titulo() {
     repetir '═' "$INTERIOR"
     printf '╗%b\n' "$RESET"
 
-    centrar "ADMRUFU 2.0"
+    centrar "ORACLE FIX FIREWALLD"
     centrar "GESTOR DE FIREWALLD"
 
     printf '%b' "${AZUL}${NEGRITA}╠"
