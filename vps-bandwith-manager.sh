@@ -1,3 +1,4 @@
+
 #!/bin/bash
 # ============================================================
 # ADMRufu 2.0 | Gestor de Ancho de Banda
@@ -21,7 +22,6 @@ CONFIG="/etc/limitador-banda.conf"
 STATUS="/etc/limitador-banda.status.json"
 SCRIPT_APLICADOR="/usr/local/bin/limitar-banda.sh"
 LOG="/var/log/limitador-banda.log"
-DEST="$HOME/.local/bin/bandwidth-manager"
 
 ANCHO=48
 INTERIOR=$((ANCHO - 2))
@@ -41,7 +41,6 @@ ancho_visual() {
     local texto="$1"
     local medida
 
-    # Eliminar secuencias ANSI antes de medir el ancho.
     texto=$(printf '%s' "$texto" |
         sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g')
 
@@ -215,7 +214,7 @@ banner() {
 # ── Validar permisos ────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
     printf '%b\n' "${rojo}${negrita}✘ ERROR:${neutro} Ejecuta este script como root."
-    printf '%b\n' "${gris}Ejemplo: sudo bash bandwidth-manager${neutro}"
+    printf '%b\n' "${gris}Ejemplo: sudo bash /ruta/al/script.sh${neutro}"
     exit 1
 fi
 
@@ -227,32 +226,53 @@ instalar_dependencias() {
     titulo_seccion "🔍 VERIFICACION DE DEPENDENCIAS"
     printf '%b\n' "${gris}Comprobando herramientas necesarias...${neutro}"
 
-    for p in jq tc; do
+    for p in jq tc ip; do
         if ! command -v "$p" >/dev/null 2>&1; then
             faltantes+=("$p")
         fi
     done
 
     if ((${#faltantes[@]} == 0)); then
-        mensaje_ok "jq y tc ya estan instalados."
+        mensaje_ok "jq, tc e ip ya estan disponibles."
         return 0
     fi
 
-    printf '%b\n' "${amarillo}Instalando: ${faltantes[*]}${neutro}"
+    # En Debian/Ubuntu, tc e ip pertenecen a iproute2.
+    local paquetes=()
+    for p in "${faltantes[@]}"; do
+        case "$p" in
+            tc|ip)
+                [[ " ${paquetes[*]} " == *" iproute2 "* ]] ||
+                    paquetes+=("iproute2")
+                ;;
+            jq)
+                paquetes+=("jq")
+                ;;
+        esac
+    done
+
+    printf '%b\n' "${amarillo}Instalando: ${paquetes[*]}${neutro}"
 
     if command -v apt-get >/dev/null 2>&1; then
         apt-get update || return 1
-        apt-get install -y "${faltantes[@]}" || return 1
+        DEBIAN_FRONTEND=noninteractive apt-get install -y "${paquetes[@]}" || return 1
     elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y "${faltantes[@]}" || return 1
+        dnf install -y "${paquetes[@]}" || return 1
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y "${faltantes[@]}" || return 1
+        yum install -y "${paquetes[@]}" || return 1
     elif command -v apk >/dev/null 2>&1; then
-        apk add "${faltantes[@]}" || return 1
+        apk add "${paquetes[@]}" || return 1
     else
         mensaje_error "No se encontro un gestor de paquetes compatible."
         return 1
     fi
+
+    for p in jq tc ip; do
+        if ! command -v "$p" >/dev/null 2>&1; then
+            mensaje_error "La herramienta '$p' sigue sin estar disponible."
+            return 1
+        fi
+    done
 
     mensaje_ok "Dependencias instaladas correctamente."
 }
@@ -272,14 +292,16 @@ detectar_interfaz() {
 
 # ── Solicitar limite de Mbps ────────────────────────────────
 solicitar_limite() {
+    local entrada
+
     while true; do
         printf '\n%b' "${amarillo}➜ ¿Cuantos Mbps deseas permitir?: ${neutro}"
-        read -r LIMITE
+        read -r entrada || return 1
 
-        if [[ "$LIMITE" =~ ^[0-9]+$ ]] &&
-            ((10#$LIMITE > 0)); then
-            LIMITE=$((10#$LIMITE))
-            break
+        if [[ "$entrada" =~ ^[0-9]+$ ]] &&
+            ((10#$entrada > 0)); then
+            LIMITE=$((10#$entrada))
+            return 0
         fi
 
         mensaje_error "Ingresa un numero entero positivo."
@@ -288,6 +310,19 @@ solicitar_limite() {
 
 # ── Aplicar limite con tc ───────────────────────────────────
 aplicar_limite() {
+    if [[ -z "${INTERFAZ:-}" ]] ||
+        ! ip link show "$INTERFAZ" >/dev/null 2>&1; then
+        mensaje_error "La interfaz de red no es valida."
+        return 1
+    fi
+
+    if [[ ! "${LIMITE:-}" =~ ^[0-9]+$ ]] ||
+        ((LIMITE <= 0)); then
+        mensaje_error "El limite debe ser un entero positivo."
+        return 1
+    fi
+
+    # Advertencia: esta operacion reemplaza la qdisc root existente.
     tc qdisc del dev "$INTERFAZ" root 2>/dev/null || true
 
     if ! tc qdisc add dev "$INTERFAZ" root handle 1: htb default 30 r2q 5; then
@@ -335,68 +370,112 @@ guardar_config() {
 
 # ── Crear aplicador permanente ──────────────────────────────
 crear_script_aplicador() {
-    cat <<EOF > "$SCRIPT_APLICADOR"
+    if ! cat <<EOF > "$SCRIPT_APLICADOR"
 #!/bin/bash
-source "$CONFIG"
+set -u
+
+CONFIG="/etc/limitador-banda.conf"
+
+if [[ ! -r "\$CONFIG" ]]; then
+    exit 1
+fi
+
+source "\$CONFIG"
+
+if [[ -z "\${INTERFAZ:-}" ]] || [[ ! "\${LIMITE:-}" =~ ^[0-9]+$ ]]; then
+    exit 1
+fi
+
+ip link show "\$INTERFAZ" >/dev/null 2>&1 || exit 1
 
 tc qdisc del dev "\$INTERFAZ" root 2>/dev/null || true
-tc qdisc add dev "\$INTERFAZ" root handle 1: htb default 30
-tc class add dev "\$INTERFAZ" parent 1: classid 1:1 htb rate "\${LIMITE}mbit" ceil "\${LIMITE}mbit"
-tc class add dev "\$INTERFAZ" parent 1:1 classid 1:30 htb rate "\${LIMITE}mbit" ceil "\${LIMITE}mbit"
+tc qdisc add dev "\$INTERFAZ" root handle 1: htb default 30 r2q 5 || exit 1
+tc class add dev "\$INTERFAZ" parent 1: classid 1:1 htb rate "\${LIMITE}mbit" ceil "\${LIMITE}mbit" || exit 1
+tc class add dev "\$INTERFAZ" parent 1:1 classid 1:30 htb rate "\${LIMITE}mbit" ceil "\${LIMITE}mbit" || exit 1
 EOF
+    then
+        mensaje_error "No se pudo crear el aplicador permanente."
+        return 1
+    fi
 
-    chmod +x "$SCRIPT_APLICADOR"
+    chmod 700 "$SCRIPT_APLICADOR"
 }
 
 # ── Agregar aplicador al crontab ────────────────────────────
 agregar_crontab() {
-    (
-        crontab -l 2>/dev/null | grep -Fv "$SCRIPT_APLICADOR"
-        echo "@reboot $SCRIPT_APLICADOR"
-    ) | crontab -
+    local temporal
+
+    temporal=$(mktemp) || return 1
+
+    if ! crontab -l 2>/dev/null |
+        grep -Fv -- "$SCRIPT_APLICADOR" > "$temporal"; then
+        :
+    fi
+
+    printf '@reboot %s\n' "$SCRIPT_APLICADOR" >> "$temporal"
+
+    if ! crontab "$temporal"; then
+        rm -f "$temporal"
+        mensaje_error "No se pudo actualizar el crontab de root."
+        return 1
+    fi
+
+    rm -f "$temporal"
 }
 
 # ── Eliminar limitacion ─────────────────────────────────────
 eliminar_limite() {
+    local interfaz_guardada=""
+
     if [[ -f "$CONFIG" ]]; then
-        INTERFAZ=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
-        INTERFAZ=${INTERFAZ#\"}
-        INTERFAZ=${INTERFAZ%\"}
-
-        if [[ -n "$INTERFAZ" ]]; then
-            tc qdisc del dev "$INTERFAZ" root 2>/dev/null || true
-        fi
-
-        rm -f "$CONFIG" "$STATUS" "$SCRIPT_APLICADOR"
-
-        crontab -l 2>/dev/null |
-            grep -Fv "$SCRIPT_APLICADOR" |
-            crontab -
-
-        mensaje_ok "Limitador eliminado."
-    else
-        printf '\n%b\n' "${amarillo}⚠ No hay configuracion activa para eliminar.${neutro}"
+        interfaz_guardada=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
+        interfaz_guardada=${interfaz_guardada#\"}
+        interfaz_guardada=${interfaz_guardada%\"}
     fi
+
+    if [[ -n "$interfaz_guardada" ]]; then
+        tc qdisc del dev "$interfaz_guardada" root 2>/dev/null || true
+    fi
+
+    rm -f "$CONFIG" "$STATUS" "$SCRIPT_APLICADOR"
+
+    local temporal
+    temporal=$(mktemp) || {
+        mensaje_error "No se pudo preparar la limpieza del crontab."
+        return 1
+    }
+
+    crontab -l 2>/dev/null |
+        grep -Fv -- "$SCRIPT_APLICADOR" > "$temporal" || true
+
+    if ! crontab "$temporal"; then
+        rm -f "$temporal"
+        mensaje_error "No se pudo limpiar la tarea de cron."
+        return 1
+    fi
+
+    rm -f "$temporal"
+    mensaje_ok "Limitacion y aplicacion automatica eliminadas."
 }
 
 # ── Aplicar limite temporal ─────────────────────────────────
 aplicar_temporal() {
-    local MIN
+    local MIN entrada
 
     while true; do
         printf '\n%b' "${amarillo}⏳ ¿Cuantos minutos deseas aplicar el limite?: ${neutro}"
-        read -r MIN
+        read -r entrada || return 1
 
-        if [[ "$MIN" =~ ^[0-9]+$ ]] &&
-            ((10#$MIN > 0)); then
-            MIN=$((10#$MIN))
+        if [[ "$entrada" =~ ^[0-9]+$ ]] &&
+            ((10#$entrada > 0)); then
+            MIN=$((10#$entrada))
             break
         fi
 
         mensaje_error "Ingresa un numero entero positivo."
     done
 
-    solicitar_limite
+    solicitar_limite || return 1
 
     if ! aplicar_limite; then
         return 1
@@ -413,7 +492,6 @@ aplicar_temporal() {
     tc qdisc del dev "$INTERFAZ" root 2>/dev/null || true
 
     printf '%s - Limite temporal eliminado\n' "$(date)" >> "$LOG"
-
     mensaje_ok "Limite temporal finalizado."
 }
 
@@ -430,6 +508,7 @@ prueba_red() {
 
     if ! command -v ping >/dev/null 2>&1; then
         mensaje_error "El comando ping no esta instalado."
+        printf '%b\n' "${gris}Instala iputils-ping o el paquete equivalente de tu sistema.${neutro}"
         return 1
     fi
 
@@ -506,12 +585,19 @@ ver_estado() {
             cat "$STATUS"
         fi
     else
-        printf '%b\n' "${rojo}Estado: ${rojo}No Configurado${neutro}"
+        printf '%b\n' "${rojo}⚙️ Estado: No Configurado${neutro}"
     fi
 
     if [[ -f "$CONFIG" ]]; then
         printf '\n%b\n' "${cyan}Configuracion guardada:${neutro}"
         cat "$CONFIG"
+    fi
+
+    if [[ -n "${INTERFAZ:-}" ]] &&
+        ip link show "$INTERFAZ" >/dev/null 2>&1; then
+        printf '\n%b\n' "${cyan}Disciplinas de trafico actuales:${neutro}"
+        tc -s qdisc show dev "$INTERFAZ" 2>/dev/null
+        tc -s class show dev "$INTERFAZ" 2>/dev/null
     fi
 }
 
@@ -526,43 +612,10 @@ ver_log() {
     fi
 }
 
-# ── Instalar comando global ─────────────────────────────────
-instalar_comando() {
-    mkdir -p "$HOME/.local/bin" || return 1
-
-    if ! cp "$0" "$DEST"; then
-        mensaje_error "No se pudo instalar el comando."
-        return 1
-    fi
-
-    chmod +x "$DEST"
-
-    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-        local shell_rc
-
-        if [[ -n "${ZSH_VERSION:-}" ]]; then
-            shell_rc="$HOME/.zshrc"
-        elif [[ -n "${BASH_VERSION:-}" ]]; then
-            shell_rc="$HOME/.bashrc"
-        else
-            shell_rc="$HOME/.profile"
-        fi
-
-        if ! grep -Fqx 'export PATH="$HOME/.local/bin:$PATH"' "$shell_rc" 2>/dev/null; then
-            printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$shell_rc"
-        fi
-
-        printf '%b\n' "${amarillo}⚠ Se configuro PATH en $shell_rc.${neutro}"
-        printf '%b\n' "${gris}Ejecuta: source $shell_rc${neutro}"
-    fi
-
-    mensaje_ok "Instalacion completada."
-    printf '%b\n' "${blanco}Comando disponible: bandwidth-manager${neutro}"
-}
-
 # ── Mostrar menu principal ──────────────────────────────────
 menu() {
     local OPCION
+    local interfaz_actual limite_actual
 
     while true; do
         banner
@@ -570,8 +623,6 @@ menu() {
         panel_abrir "INFORMACION DEL SISTEMA"
 
         if [[ -f "$CONFIG" ]]; then
-            local interfaz_actual limite_actual
-
             interfaz_actual=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
             limite_actual=$(sed -n 's/^LIMITE=//p' "$CONFIG" | head -n1)
 
@@ -589,12 +640,12 @@ menu() {
                 panel_fila "🌐 Interfaz: ${interfaz_actual}"
                 panel_fila "🚀 Limite: ${limite_actual} Mbps"
             else
-                panel_fila_estado "Estado: " "No Configurado" "$rojo"
+                panel_fila_estado "⚙️ Estado: " "No Configurado" "$rojo"
                 panel_fila "🌐 Interfaz: No disponible"
                 panel_fila "🚀 Limite: No establecido"
             fi
         else
-            panel_fila_estado "Estado: " "No Configurado" "$rojo"
+            panel_fila_estado "⚙️ Estado: " "No Configurado" "$rojo"
             panel_fila "🌐 Interfaz: Pendiente"
             panel_fila "🚀 Limite: No establecido"
         fi
@@ -613,13 +664,13 @@ menu() {
         printf '  %b  %s\n' "${amarillo}5)${neutro}" "🗑️ Eliminar limitacion"
         printf '  %b  %s\n' "${amarillo}6)${neutro}" "📜 Ver registro de actividad"
         printf '  %b  %s\n' "${amarillo}7)${neutro}" "📡 Probar conectividad"
-        printf '  %b  %s\n' "${rojo}8)${neutro}" "🔥 Desinstalar completamente"
+        printf '  %b  %s\n' "${rojo}8)${neutro}" "🔥 Desinstalar configuracion"
         printf '  %b  %s\n' "${amarillo}0)${neutro}" "🚪 Salir"
 
         printf '\n'
         repetir '─' "$ANCHO"
         printf '\n%b' "${amarillo}➜ Selecciona una opcion: ${neutro}"
-        read -r OPCION
+        read -r OPCION || exit 0
 
         case "$OPCION" in
             1)
@@ -627,10 +678,11 @@ menu() {
                     detectar_interfaz &&
                     solicitar_limite &&
                     aplicar_limite &&
-                    guardar_config; then
-                    crear_script_aplicador
-                    agregar_crontab
+                    guardar_config &&
+                    crear_script_aplicador &&
+                    agregar_crontab; then
                     mensaje_ok "Limite de ${LIMITE} Mbps aplicado correctamente."
+                    mensaje_ok "La configuracion se aplicara automaticamente al reiniciar."
                 else
                     mensaje_error "No se pudo completar la operacion."
                 fi
@@ -638,6 +690,11 @@ menu() {
                 ;;
 
             2)
+                if [[ -f "$CONFIG" ]]; then
+                    INTERFAZ=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
+                    INTERFAZ=${INTERFAZ#\"}
+                    INTERFAZ=${INTERFAZ%\"}
+                fi
                 ver_estado
                 pausa
                 ;;
@@ -650,13 +707,11 @@ menu() {
                     INTERFAZ=${INTERFAZ#\"}
                     INTERFAZ=${INTERFAZ%\"}
 
-                    LIMITE=$(sed -n 's/^LIMITE=//p' "$CONFIG" | head -n1)
-                    LIMITE=${LIMITE#\"}
-                    LIMITE=${LIMITE%\"}
-
-                    if solicitar_limite && aplicar_limite && guardar_config; then
-                        crear_script_aplicador
-                        agregar_crontab
+                    if solicitar_limite &&
+                        aplicar_limite &&
+                        guardar_config &&
+                        crear_script_aplicador &&
+                        agregar_crontab; then
                         mensaje_ok "Limite actualizado a ${LIMITE} Mbps."
                     else
                         mensaje_error "No se pudo actualizar el limite."
@@ -689,17 +744,17 @@ menu() {
 
             8)
                 printf '\n%b' "${rojo}${negrita}⚠ ADVERTENCIA${neutro}"
-                printf '\n%b\n' "${amarillo}Se eliminaran los archivos del limitador y el comando.${neutro}"
+                printf '\n%b\n' "${amarillo}Se eliminaran la configuracion del limitador, el aplicador y la tarea automatica de cron.${neutro}"
+                printf '%b\n' "${gris}El archivo de este gestor no se eliminara.${neutro}"
                 printf '%b' "${amarillo}¿Deseas continuar? [s/N]: ${neutro}"
                 read -r CONFIRMAR
 
                 case "$CONFIRMAR" in
                     s|S|si|SI|Si|sí|Sí)
                         eliminar_limite
-                        rm -f "$DEST"
-                        mensaje_ok "Comando bandwidth-manager desinstalado."
-                        printf '\n%b\n' "${gris}Hasta pronto.${neutro}"
-                        exit 0
+                        printf '\n%b\n' "${verde}✔ Configuracion del limitador eliminada.${neutro}"
+                        printf '%b\n' "${gris}Puedes volver a ejecutar este mismo archivo cuando lo necesites.${neutro}"
+                        pausa
                         ;;
                     *)
                         printf '\n%b\n' "${amarillo}Operacion cancelada.${neutro}"
@@ -721,19 +776,10 @@ menu() {
     done
 }
 
-# ── Instalacion inicial automatica ──────────────────────────
-if [[ "$0" != "$DEST" ]]; then
-    if ! instalar_dependencias; then
-        mensaje_error "No se pudieron instalar las dependencias."
-        exit 1
-    fi
-
-    if ! instalar_comando; then
-        exit 1
-    fi
-
-    exit 0
+# ── Inicio directo: sin instalar comando global ─────────────
+if ! instalar_dependencias; then
+    mensaje_error "No se pudieron instalar las dependencias."
+    exit 1
 fi
 
-# ── Ejecutar gestor ─────────────────────────────────────────
 menu
