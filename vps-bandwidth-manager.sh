@@ -40,12 +40,9 @@ ancho_visual() {
     local texto="$1"
     local medida
 
-    # Retirar colores ANSI antes de medir.
     texto=$(printf '%s' "$texto" |
         sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g')
 
-    # wc -L calcula el ancho de la linea segun la configuracion
-    # regional disponible en el sistema.
     medida=$(printf '%s' "$texto" | wc -L 2>/dev/null)
     medida=${medida//[!0-9]/}
 
@@ -120,9 +117,6 @@ panel_abrir() {
     local visible guiones
 
     visible=$(ancho_visual "$titulo")
-
-    # Ancho total: esquina + prefijo + titulo + espacio +
-    # guiones + esquina final.
     guiones=$((ANCHO - visible - 5))
 
     ((guiones < 1)) && guiones=1
@@ -153,9 +147,6 @@ panel_fila() {
         "${cyan}│${neutro}"
 }
 
-# Fila de estado: solo colorea el estado.
-# Se mantienen etiquetas sin emojis dentro del marco para
-# evitar diferencias de ancho entre terminales.
 panel_fila_estado() {
     local etiqueta="$1"
     local estado="$2"
@@ -233,7 +224,7 @@ instalar_dependencias() {
     local paquetes=()
     local p
 
-    titulo_seccion "🔍 VERIFICACION DE DEPENDENCIAS"
+    titulo_seccion "VERIFICACION DE DEPENDENCIAS"
     printf '%b\n' "${gris}Comprobando herramientas necesarias...${neutro}"
 
     for p in jq tc ip; do
@@ -296,6 +287,41 @@ detectar_interfaz() {
     fi
 
     printf '\n%b\n' "${verde}✔ Interfaz detectada: ${blanco}${INTERFAZ}${neutro}"
+}
+
+# ── Cargar configuracion guardada ───────────────────────────
+cargar_config() {
+    if [[ ! -r "$CONFIG" ]]; then
+        mensaje_error "No existe una configuracion legible."
+        return 1
+    fi
+
+    # El archivo es creado por este gestor mediante printf %q.
+    # Se valida su contenido antes de utilizarlo.
+    local interfaz_guardada limite_guardado
+
+    interfaz_guardada=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
+    limite_guardado=$(sed -n 's/^LIMITE=//p' "$CONFIG" | head -n1)
+
+    # Descodificar los valores generados por printf %q.
+    if ! eval "INTERFAZ=$interfaz_guardada" 2>/dev/null; then
+        mensaje_error "No se pudo interpretar la interfaz guardada."
+        return 1
+    fi
+
+    if ! eval "LIMITE=$limite_guardado" 2>/dev/null; then
+        mensaje_error "No se pudo interpretar el limite guardado."
+        return 1
+    fi
+
+    if [[ -z "${INTERFAZ:-}" ]] ||
+        [[ ! "${LIMITE:-}" =~ ^[0-9]+$ ]] ||
+        ((LIMITE <= 0)); then
+        mensaje_error "La configuracion guardada no es valida."
+        return 1
+    fi
+
+    return 0
 }
 
 # ── Solicitar limite de Mbps ────────────────────────────────
@@ -363,6 +389,11 @@ guardar_config() {
         return 1
     fi
 
+    chmod 600 "$CONFIG" || {
+        mensaje_error "No se pudieron ajustar los permisos de la configuracion."
+        return 1
+    }
+
     if ! printf '{"interfaz":"%s","limite_mbps":%s,"aplicado":true,"ultima_aplicacion":"%s"}\n' \
         "$INTERFAZ" "$LIMITE" \
         "$(date -u +"%Y-%m-%d %H:%M:%S UTC")" > "$STATUS"; then
@@ -378,42 +409,50 @@ guardar_config() {
 
 # ── Crear aplicador permanente ──────────────────────────────
 crear_script_aplicador() {
-    if ! cat <<EOF > "$SCRIPT_APLICADOR"
+    if ! cat <<'EOF' > "$SCRIPT_APLICADOR"
 #!/bin/bash
 set -u
 
 CONFIG="/etc/limitador-banda.conf"
 
-if [[ ! -r "\$CONFIG" ]]; then
+if [[ ! -r "$CONFIG" ]]; then
     exit 1
 fi
 
-source "\$CONFIG"
+source "$CONFIG"
 
-if [[ -z "\${INTERFAZ:-}" ]] || [[ ! "\${LIMITE:-}" =~ ^[0-9]+$ ]] || ((LIMITE <= 0)); then
+if [[ -z "${INTERFAZ:-}" ]] ||
+    [[ ! "${LIMITE:-}" =~ ^[0-9]+$ ]] ||
+    ((LIMITE <= 0)); then
     exit 1
 fi
 
-ip link show "\$INTERFAZ" >/dev/null 2>&1 || exit 1
+ip link show "$INTERFAZ" >/dev/null 2>&1 || exit 1
 
-tc qdisc del dev "\$INTERFAZ" root 2>/dev/null || true
-tc qdisc add dev "\$INTERFAZ" root handle 1: htb default 30 r2q 5 || exit 1
-tc class add dev "\$INTERFAZ" parent 1: classid 1:1 htb rate "\${LIMITE}mbit" ceil "\${LIMITE}mbit" || exit 1
-tc class add dev "\$INTERFAZ" parent 1:1 classid 1:30 htb rate "\${LIMITE}mbit" ceil "\${LIMITE}mbit" || exit 1
+tc qdisc del dev "$INTERFAZ" root 2>/dev/null || true
+tc qdisc add dev "$INTERFAZ" root handle 1: htb default 30 r2q 5 || exit 1
+tc class add dev "$INTERFAZ" parent 1: classid 1:1 htb rate "${LIMITE}mbit" ceil "${LIMITE}mbit" || exit 1
+tc class add dev "$INTERFAZ" parent 1:1 classid 1:30 htb rate "${LIMITE}mbit" ceil "${LIMITE}mbit" || exit 1
 EOF
     then
         mensaje_error "No se pudo crear el aplicador permanente."
         return 1
     fi
 
-    chmod 700 "$SCRIPT_APLICADOR"
+    chmod 700 "$SCRIPT_APLICADOR" || {
+        mensaje_error "No se pudieron ajustar los permisos del aplicador."
+        return 1
+    }
 }
 
 # ── Agregar aplicador al crontab ────────────────────────────
 agregar_crontab() {
     local temporal
 
-    temporal=$(mktemp) || return 1
+    temporal=$(mktemp) || {
+        mensaje_error "No se pudo crear el archivo temporal de cron."
+        return 1
+    }
 
     crontab -l 2>/dev/null |
         grep -Fv -- "$SCRIPT_APLICADOR" > "$temporal" || true
@@ -433,20 +472,18 @@ agregar_crontab() {
 # ── Eliminar limitacion ─────────────────────────────────────
 eliminar_limite() {
     local interfaz_guardada=""
-
-    if [[ -f "$CONFIG" ]]; then
-        interfaz_guardada=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
-        interfaz_guardada=${interfaz_guardada#\"}
-        interfaz_guardada=${interfaz_guardada%\"}
-    fi
-
-    if [[ -n "$interfaz_guardada" ]]; then
-        tc qdisc del dev "$interfaz_guardada" root 2>/dev/null || true
-    fi
-
-    rm -f "$CONFIG" "$STATUS" "$SCRIPT_APLICADOR"
-
     local temporal
+
+    # Leer la configuracion antes de eliminarla.
+    if [[ -f "$CONFIG" ]]; then
+        if ! cargar_config; then
+            mensaje_error "No se pudo validar la configuracion. No se eliminaran los archivos."
+            return 1
+        fi
+        interfaz_guardada="$INTERFAZ"
+    fi
+
+    # Preparar y actualizar cron antes de borrar los archivos.
     temporal=$(mktemp) || {
         mensaje_error "No se pudo preparar la limpieza del crontab."
         return 1
@@ -457,12 +494,27 @@ eliminar_limite() {
 
     if ! crontab "$temporal"; then
         rm -f "$temporal"
-        mensaje_error "No se pudo limpiar la tarea de cron."
+        mensaje_error "No se pudo limpiar la tarea de cron. No se eliminaron los archivos de configuracion."
         return 1
     fi
 
     rm -f "$temporal"
+
+    # Quitar la limitacion de la interfaz configurada.
+    if [[ -n "$interfaz_guardada" ]] &&
+        ip link show "$interfaz_guardada" >/dev/null 2>&1; then
+        if ! tc qdisc del dev "$interfaz_guardada" root 2>/dev/null; then
+            printf '%b\n' "${amarillo}⚠ No se pudo confirmar la eliminacion de la qdisc en ${interfaz_guardada}.${neutro}"
+        fi
+    fi
+
+    if ! rm -f "$CONFIG" "$STATUS" "$SCRIPT_APLICADOR"; then
+        mensaje_error "No se pudieron eliminar todos los archivos del limitador."
+        return 1
+    fi
+
     mensaje_ok "Limitacion y aplicacion automatica eliminadas."
+    return 0
 }
 
 # ── Aplicar limite temporal ─────────────────────────────────
@@ -509,7 +561,7 @@ prueba_red() {
     local latencia_min latencia_avg latencia_max latencia_mdev
     local host="google.com"
 
-    titulo_seccion "📡 PRUEBA DE CONECTIVIDAD"
+    titulo_seccion "PRUEBA DE CONECTIVIDAD"
     printf '%b\n' "${gris}Destino: ${blanco}${host}${neutro}"
     printf '%b\n' "${gris}Enviando 4 paquetes ICMP...${neutro}"
 
@@ -583,7 +635,7 @@ prueba_red() {
 
 # ── Ver estado actual ───────────────────────────────────────
 ver_estado() {
-    titulo_seccion "📊 ESTADO ACTUAL"
+    titulo_seccion "ESTADO ACTUAL"
 
     if [[ -f "$STATUS" ]]; then
         if command -v jq >/dev/null 2>&1; then
@@ -599,27 +651,24 @@ ver_estado() {
         printf '\n%b\n' "${cyan}Configuracion guardada:${neutro}"
         cat "$CONFIG"
 
-        INTERFAZ=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
-        INTERFAZ=${INTERFAZ#\"}
-        INTERFAZ=${INTERFAZ%\"}
-
-        if [[ -n "$INTERFAZ" ]] &&
-            ip link show "$INTERFAZ" >/dev/null 2>&1; then
-            printf '\n%b\n' "${cyan}Disciplinas de trafico actuales:${neutro}"
-            tc -s qdisc show dev "$INTERFAZ" 2>/dev/null
-            tc -s class show dev "$INTERFAZ" 2>/dev/null
+        if cargar_config; then
+            if ip link show "$INTERFAZ" >/dev/null 2>&1; then
+                printf '\n%b\n' "${cyan}Disciplinas de trafico actuales:${neutro}"
+                tc -s qdisc show dev "$INTERFAZ" 2>/dev/null
+                tc -s class show dev "$INTERFAZ" 2>/dev/null
+            fi
         fi
     fi
 }
 
 # ── Ver registro de actividad ───────────────────────────────
 ver_log() {
-    titulo_seccion "📜 REGISTRO DE ACTIVIDAD"
+    titulo_seccion "REGISTRO DE ACTIVIDAD"
 
     if [[ -f "$LOG" ]]; then
         cat "$LOG"
     else
-        printf '%b\n' "${amarillo}📂 Todavia no hay registros.${neutro}"
+        printf '%b\n' "${amarillo}Todavia no hay registros.${neutro}"
     fi
 }
 
@@ -633,20 +682,11 @@ menu() {
 
         panel_abrir "INFORMACION DEL SISTEMA"
 
-        if [[ -f "$CONFIG" ]]; then
-            interfaz_actual=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
-            limite_actual=$(sed -n 's/^LIMITE=//p' "$CONFIG" | head -n1)
+        if [[ -f "$CONFIG" ]] && cargar_config; then
+            interfaz_actual="$INTERFAZ"
+            limite_actual="$LIMITE"
 
-            interfaz_actual=${interfaz_actual#\"}
-            interfaz_actual=${interfaz_actual%\"}
-            limite_actual=${limite_actual#\"}
-            limite_actual=${limite_actual%\"}
-
-            if [[ "$limite_actual" =~ ^[0-9]+$ ]] &&
-                ((10#$limite_actual > 0)) &&
-                [[ -n "$interfaz_actual" ]] &&
-                ip link show "$interfaz_actual" >/dev/null 2>&1; then
-
+            if ip link show "$interfaz_actual" >/dev/null 2>&1; then
                 panel_fila_estado "Estado: " "Configurado" "$verde"
                 panel_fila "Interfaz: ${interfaz_actual}"
                 panel_fila "Limite: ${limite_actual} Mbps"
@@ -675,7 +715,6 @@ menu() {
         printf '  %b  %s\n' "${amarillo}5)${neutro}" "🗑️ Eliminar limitacion"
         printf '  %b  %s\n' "${amarillo}6)${neutro}" "📜 Ver registro de actividad"
         printf '  %b  %s\n' "${amarillo}7)${neutro}" "📡 Probar conectividad"
-        printf '  %b  %s\n' "${rojo}8)${neutro}" "🔥 Desinstalar configuracion"
         printf '  %b  %s\n' "${amarillo}0)${neutro}" "🚪 Salir"
 
         printf '\n'
@@ -708,11 +747,7 @@ menu() {
             3)
                 if [[ ! -f "$CONFIG" ]]; then
                     mensaje_error "No hay configuracion previa."
-                else
-                    INTERFAZ=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
-                    INTERFAZ=${INTERFAZ#\"}
-                    INTERFAZ=${INTERFAZ%\"}
-
+                elif cargar_config; then
                     if solicitar_limite &&
                         aplicar_limite &&
                         guardar_config &&
@@ -722,6 +757,8 @@ menu() {
                     else
                         mensaje_error "No se pudo actualizar el limite."
                     fi
+                else
+                    mensaje_error "No se pudo leer la configuracion existente."
                 fi
                 pausa
                 ;;
@@ -734,7 +771,27 @@ menu() {
                 ;;
 
             5)
-                eliminar_limite
+                if [[ ! -f "$CONFIG" &&
+                    ! -f "$STATUS" &&
+                    ! -f "$SCRIPT_APLICADOR" ]]; then
+                    mensaje_ok "No se encontraron archivos de configuracion del limitador."
+                else
+                    printf '\n%b' "${amarillo}¿Eliminar la limitacion y su aplicacion automatica? [s/N]: ${neutro}"
+                    read -r CONFIRMAR
+
+                    case "$CONFIRMAR" in
+                        s|S|si|SI|Si|sí|Sí)
+                            if eliminar_limite; then
+                                mensaje_ok "El limitador se ha eliminado correctamente."
+                            else
+                                mensaje_error "La eliminacion no se completo correctamente."
+                            fi
+                            ;;
+                        *)
+                            printf '\n%b\n' "${amarillo}Operacion cancelada.${neutro}"
+                            ;;
+                    esac
+                fi
                 pausa
                 ;;
 
@@ -748,34 +805,13 @@ menu() {
                 pausa
                 ;;
 
-            8)
-                printf '\n%b' "${rojo}${negrita}⚠ ADVERTENCIA${neutro}"
-                printf '\n%b\n' "${amarillo}Se eliminaran la configuracion del limitador, el aplicador y la tarea automatica de cron.${neutro}"
-                printf '%b\n' "${gris}El archivo de este gestor no se eliminara.${neutro}"
-                printf '%b' "${amarillo}¿Deseas continuar? [s/N]: ${neutro}"
-                read -r CONFIRMAR
-
-                case "$CONFIRMAR" in
-                    s|S|si|SI|Si|sí|Sí)
-                        eliminar_limite
-                        printf '\n%b\n' "${verde}✔ Configuracion del limitador eliminada.${neutro}"
-                        printf '%b\n' "${gris}Puedes volver a ejecutar este mismo archivo cuando lo necesites.${neutro}"
-                        pausa
-                        ;;
-                    *)
-                        printf '\n%b\n' "${amarillo}Operacion cancelada.${neutro}"
-                        pausa
-                        ;;
-                esac
-                ;;
-
             0)
                 printf '\n%b\n' "${verde}✔ Saliendo del gestor.${neutro}"
                 exit 0
                 ;;
 
             *)
-                mensaje_error "Opcion invalida. Selecciona del 0 al 8."
+                mensaje_error "Opcion invalida. Selecciona del 0 al 7."
                 pausa
                 ;;
         esac
