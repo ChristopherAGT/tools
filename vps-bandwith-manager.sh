@@ -585,7 +585,7 @@ menu() {
                 [[ -n "$interfaz_actual" ]] &&
                 ip link show "$interfaz_actual" >/dev/null 2>&1; then
 
-                panel_fila_estado "Estado: " "Configurado" "$verde"
+                panel_fila_estado "⚙️ Estado: " "Configurado" "$verde"
                 panel_fila "🌐 Interfaz: ${interfaz_actual}"
                 panel_fila "🚀 Limite: ${limite_actual} Mbps"
             else
