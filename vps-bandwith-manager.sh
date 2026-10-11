@@ -26,7 +26,7 @@ DEST="$HOME/.local/bin/bandwidth-manager"
 ANCHO=48
 INTERIOR=$((ANCHO - 2))
 
-# ── Funciones visuales ───────────────────────────────────────
+# ── Funciones visuales ──────────────────────────────────────
 repetir() {
     local caracter="$1"
     local cantidad="$2"
@@ -40,6 +40,10 @@ repetir() {
 ancho_visual() {
     local texto="$1"
     local medida
+
+    # Eliminar secuencias ANSI antes de medir el ancho.
+    texto=$(printf '%s' "$texto" |
+        sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g')
 
     medida=$(printf '%s' "$texto" | wc -L 2>/dev/null)
     medida=${medida//[!0-9]/}
@@ -143,6 +147,34 @@ panel_fila() {
         "${cyan}│${neutro}"
 }
 
+# Fila de estado: solo colorea el texto del estado.
+panel_fila_estado() {
+    local etiqueta="$1"
+    local estado="$2"
+    local color="$3"
+    local max=$((ANCHO - 4))
+    local texto visible espacios
+
+    texto="${etiqueta}${estado}"
+    visible=$(ancho_visual "$texto")
+
+    if ((visible > max)); then
+        estado="${estado:0:$((max - ${#etiqueta} - 3))}..."
+        texto="${etiqueta}${estado}"
+        visible=$(ancho_visual "$texto")
+    fi
+
+    espacios=$((max - visible))
+    ((espacios < 0)) && espacios=0
+
+    printf '%b %s%b%s%b%*s %b\n' \
+        "${cyan}│${neutro}" \
+        "$etiqueta" \
+        "$color" "$estado" "${neutro}" \
+        "$espacios" "" \
+        "${cyan}│${neutro}"
+}
+
 panel_cerrar() {
     printf '%b' "${cyan}└"
     repetir '─' "$INTERIOR"
@@ -180,14 +212,14 @@ banner() {
     printf '\n'
 }
 
-# ── Validar permisos ─────────────────────────────────────────
+# ── Validar permisos ────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
     printf '%b\n' "${rojo}${negrita}✘ ERROR:${neutro} Ejecuta este script como root."
     printf '%b\n' "${gris}Ejemplo: sudo bash bandwidth-manager${neutro}"
     exit 1
 fi
 
-# ── Instalar dependencias ────────────────────────────────────
+# ── Instalar dependencias ───────────────────────────────────
 instalar_dependencias() {
     local faltantes=()
     local p
@@ -225,7 +257,7 @@ instalar_dependencias() {
     mensaje_ok "Dependencias instaladas correctamente."
 }
 
-# ── Detectar interfaz de red ─────────────────────────────────
+# ── Detectar interfaz de red ────────────────────────────────
 detectar_interfaz() {
     INTERFAZ=$(ip route show default 2>/dev/null |
         awk '/default/ {print $5; exit}')
@@ -238,7 +270,7 @@ detectar_interfaz() {
     printf '\n%b\n' "${verde}✔ Interfaz detectada: ${blanco}${INTERFAZ}${neutro}"
 }
 
-# ── Solicitar limite de Mbps ─────────────────────────────────
+# ── Solicitar limite de Mbps ────────────────────────────────
 solicitar_limite() {
     while true; do
         printf '\n%b' "${amarillo}➜ ¿Cuantos Mbps deseas permitir?: ${neutro}"
@@ -254,7 +286,7 @@ solicitar_limite() {
     done
 }
 
-# ── Aplicar limite con tc ────────────────────────────────────
+# ── Aplicar limite con tc ───────────────────────────────────
 aplicar_limite() {
     tc qdisc del dev "$INTERFAZ" root 2>/dev/null || true
 
@@ -280,7 +312,7 @@ aplicar_limite() {
     return 0
 }
 
-# ── Guardar configuracion ────────────────────────────────────
+# ── Guardar configuracion ───────────────────────────────────
 guardar_config() {
     if ! printf 'INTERFAZ=%q\nLIMITE=%q\n' \
         "$INTERFAZ" "$LIMITE" > "$CONFIG"; then
@@ -301,7 +333,7 @@ guardar_config() {
     return 0
 }
 
-# ── Crear aplicador permanente ───────────────────────────────
+# ── Crear aplicador permanente ──────────────────────────────
 crear_script_aplicador() {
     cat <<EOF > "$SCRIPT_APLICADOR"
 #!/bin/bash
@@ -316,7 +348,7 @@ EOF
     chmod +x "$SCRIPT_APLICADOR"
 }
 
-# ── Agregar aplicador al crontab ─────────────────────────────
+# ── Agregar aplicador al crontab ────────────────────────────
 agregar_crontab() {
     (
         crontab -l 2>/dev/null | grep -Fv "$SCRIPT_APLICADOR"
@@ -324,7 +356,7 @@ agregar_crontab() {
     ) | crontab -
 }
 
-# ── Eliminar limitacion ──────────────────────────────────────
+# ── Eliminar limitacion ─────────────────────────────────────
 eliminar_limite() {
     if [[ -f "$CONFIG" ]]; then
         INTERFAZ=$(sed -n 's/^INTERFAZ=//p' "$CONFIG" | head -n1)
@@ -347,7 +379,7 @@ eliminar_limite() {
     fi
 }
 
-# ── Aplicar limite temporal ──────────────────────────────────
+# ── Aplicar limite temporal ─────────────────────────────────
 aplicar_temporal() {
     local MIN
 
@@ -385,7 +417,7 @@ aplicar_temporal() {
     mensaje_ok "Limite temporal finalizado."
 }
 
-# ── Prueba de red con resumen visual ─────────────────────────
+# ── Prueba de red con resumen visual ────────────────────────
 prueba_red() {
     local salida codigo
     local enviados recibidos perdidos
@@ -463,7 +495,7 @@ prueba_red() {
     fi
 }
 
-# ── Ver estado actual ────────────────────────────────────────
+# ── Ver estado actual ──────────────────────────────────────
 ver_estado() {
     titulo_seccion "📊 ESTADO ACTUAL"
 
@@ -474,7 +506,7 @@ ver_estado() {
             cat "$STATUS"
         fi
     else
-        printf '%b\n' "${amarillo}⚠ No hay configuracion registrada.${neutro}"
+        printf '%b\n' "${rojo}Estado: ${rojo}No Configurado${neutro}"
     fi
 
     if [[ -f "$CONFIG" ]]; then
@@ -483,7 +515,7 @@ ver_estado() {
     fi
 }
 
-# ── Ver registro de actividad ────────────────────────────────
+# ── Ver registro de actividad ───────────────────────────────
 ver_log() {
     titulo_seccion "📜 REGISTRO DE ACTIVIDAD"
 
@@ -494,7 +526,7 @@ ver_log() {
     fi
 }
 
-# ── Instalar comando global ──────────────────────────────────
+# ── Instalar comando global ─────────────────────────────────
 instalar_comando() {
     mkdir -p "$HOME/.local/bin" || return 1
 
@@ -528,7 +560,7 @@ instalar_comando() {
     printf '%b\n' "${blanco}Comando disponible: bandwidth-manager${neutro}"
 }
 
-# ── Mostrar menu principal ───────────────────────────────────
+# ── Mostrar menu principal ──────────────────────────────────
 menu() {
     local OPCION
 
@@ -553,16 +585,16 @@ menu() {
                 [[ -n "$interfaz_actual" ]] &&
                 ip link show "$interfaz_actual" >/dev/null 2>&1; then
 
-                panel_fila "${verde}🟢 Estado: Limite establecido${neutro}"
+                panel_fila_estado "Estado: " "Configurado" "$verde"
                 panel_fila "🌐 Interfaz: ${interfaz_actual}"
                 panel_fila "🚀 Limite: ${limite_actual} Mbps"
             else
-                panel_fila "${rojo}🔴 Estado: Limite no establecido${neutro}"
+                panel_fila_estado "Estado: " "No Configurado" "$rojo"
                 panel_fila "🌐 Interfaz: No disponible"
                 panel_fila "🚀 Limite: No establecido"
             fi
         else
-            panel_fila "${rojo}🔴 Estado: Limite no establecido${neutro}"
+            panel_fila_estado "Estado: " "No Configurado" "$rojo"
             panel_fila "🌐 Interfaz: Pendiente"
             panel_fila "🚀 Limite: No establecido"
         fi
@@ -689,7 +721,7 @@ menu() {
     done
 }
 
-# ── Instalacion inicial automatica ───────────────────────────
+# ── Instalacion inicial automatica ──────────────────────────
 if [[ "$0" != "$DEST" ]]; then
     if ! instalar_dependencias; then
         mensaje_error "No se pudieron instalar las dependencias."
@@ -703,5 +735,5 @@ if [[ "$0" != "$DEST" ]]; then
     exit 0
 fi
 
-# ── Ejecutar gestor ──────────────────────────────────────────
+# ── Ejecutar gestor ─────────────────────────────────────────
 menu
