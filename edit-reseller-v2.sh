@@ -226,7 +226,7 @@ borde_superior
 centrar "VISTA PREVIA"
 separador
 fila ""
-fila "Nombre del Reseller:" "$final"
+fila "Nombre del Reseller: $final"
 fila ""
 borde_inferior
 
