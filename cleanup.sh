@@ -81,16 +81,15 @@ repeat_char() {
     printf '%s' "$REPEAT_RESULT"
 }
 
-# Elimina secuencias ANSI antes de medir el texto.
 strip_ansi() {
     printf '%s' "$1" |
         sed -E $'s/\033\\[[0-?]*[ -/]*[@-~]//g'
 }
 
-# Calcula el ancho visible del texto en la terminal.
-# No cuenta secuencias ANSI ni caracteres combinados.
-# Evita contar símbolos como ✔ y ✖ como emojis de dos columnas
-# cuando no llevan selector de presentación emoji.
+# --------------------------------------------------------------
+# ANCHO VISIBLE UNICODE
+# --------------------------------------------------------------
+
 visible_width() {
     python3 -c '
 import re
@@ -106,7 +105,10 @@ join_next = False
 for char in text:
     cp = ord(char)
 
-    # Caracteres combinados y selectores de variación.
+    if cp == 0x200D:
+        join_next = True
+        continue
+
     if (
         unicodedata.combining(char)
         or 0x0300 <= cp <= 0x036F
@@ -114,32 +116,33 @@ for char in text:
         or 0x1DC0 <= cp <= 0x1DFF
         or 0xFE00 <= cp <= 0xFE0F
         or 0xE0100 <= cp <= 0xE01EF
+        or cp == 0x20E3
     ):
-        # Un símbolo normal puede ocupar una columna y pasar a dos
-        # cuando aparece explícitamente con presentación emoji.
         if cp == 0xFE0F and previous_width == 1:
             width += 1
             previous_width = 2
         continue
 
-    # Unificador de secuencias emoji.
-    if cp == 0x200D:
-        join_next = True
-        continue
-
     east_width = unicodedata.east_asian_width(char)
 
-    # Solo se fuerzan a dos columnas los bloques de emojis
-    # principales. Los símbolos Unicode como ✔ y ✖ conservan
-    # su ancho normal, salvo que incluyan VS16.
-    is_emoji = (
-        0x1F000 <= cp <= 0x1FAFF
-        or 0x1FC00 <= cp <= 0x1FFFF
-    )
+    # Los tres símbolos del resumen se cuentan como caracteres
+    # de texto de una columna, evitando diferencias de ancho
+    # entre fuentes y terminales.
+    if cp in (0x2714, 0x2716, 0x21B7):
+        char_width = 1
+    else:
+        is_emoji = (
+            0x1F000 <= cp <= 0x1FAFF
+            or 0x1FC00 <= cp <= 0x1FFFF
+            or (
+                0x2600 <= cp <= 0x27BF
+                and cp not in (0x2714, 0x2716)
+            )
+        )
 
-    char_width = (
-        2 if east_width in ("W", "F") or is_emoji else 1
-    )
+        char_width = (
+            2 if east_width in ("W", "F") or is_emoji else 1
+        )
 
     if join_next:
         width += max(0, char_width - previous_width)
@@ -227,98 +230,53 @@ read_directory_size() {
 
 box_top() {
     local color="$1"
-    local line
 
-    line="$(repeat_char '─' "$BOX_WIDTH")"
-    printf '%b  ╭%s╮%b\n' "$color" "$line" "$R"
+    printf '%b  ╭' "$color"
+    repeat_char '─' "$BOX_WIDTH"
+    printf '╮%b\n' "$R"
 }
 
 box_bottom() {
     local color="$1"
-    local line
 
-    line="$(repeat_char '─' "$BOX_WIDTH")"
-    printf '%b  ╰%s╯%b\n' "$color" "$line" "$R"
+    printf '%b  ╰' "$color"
+    repeat_char '─' "$BOX_WIDTH"
+    printf '╯%b\n' "$R"
 }
 
 box_separator() {
     local color="$1"
-    local line
 
-    line="$(repeat_char '─' "$BOX_WIDTH")"
-    printf '%b  ├%s┤%b\n' "$color" "$line" "$R"
+    printf '%b  ├' "$color"
+    repeat_char '─' "$BOX_WIDTH"
+    printf '┤%b\n' "$R"
 }
 
-# Dibuja filas con anchura fija.
-# El ancho interior corresponde a BOX_WIDTH.
-# Las secuencias ANSI no afectan al cálculo del relleno.
+# --------------------------------------------------------------
+# FILAS DE ANCHO FIJO
+# --------------------------------------------------------------
+
 box_row() {
     local color="$1"
     local content="$2"
     local width padding max_width
-    local plain_content
 
     max_width=$((BOX_WIDTH - 2))
     width="$(visible_width "$content")"
 
-    # Si el texto excede el espacio disponible, se recorta
-    # sin dejar secuencias ANSI incompletas.
     if (( width > max_width )); then
-        plain_content="$(strip_ansi "$content")"
-
-        content="$(
-            python3 -c '
-import sys
-import unicodedata
-
-text = sys.argv[1]
-limit = int(sys.argv[2])
-result = []
-width = 0
-previous_width = 0
-
-for char in text:
-    cp = ord(char)
-
-    if (
-        unicodedata.combining(char)
-        or 0x0300 <= cp <= 0x036F
-        or 0x1AB0 <= cp <= 0x1AFF
-        or 0x1DC0 <= cp <= 0x1DFF
-        or 0xFE00 <= cp <= 0xFE0F
-        or 0xE0100 <= cp <= 0xE01EF
-        or cp == 0x200D
-    ):
-        result.append(char)
-        continue
-
-    east_width = unicodedata.east_asian_width(char)
-    is_emoji = 0x1F000 <= cp <= 0x1FAFF or 0x1FC00 <= cp <= 0x1FFFF
-
-    char_width = (
-        2 if east_width in ("W", "F") or is_emoji else 1
-    )
-
-    if width + char_width > limit:
-        break
-
-    result.append(char)
-    width += char_width
-    previous_width = char_width
-
-print("".join(result), end="")
-' "$plain_content" "$max_width"
-        )"
-
+        content="$(strip_ansi "$content")"
+        content="${content:0:max_width}"
         width="$(visible_width "$content")"
     fi
 
     padding=$((max_width - width))
     (( padding < 0 )) && padding=0
 
-    # El borde derecho queda siempre en la misma columna.
-    printf '%b  │%b %s%*s %b│%b\n' \
-        "$color" "$R" "$content" "$padding" "" "$color" "$R"
+    printf '  %b│%b ' "$color" "$R"
+    printf '%b' "$content"
+    printf '%*s' "$padding" ''
+    printf ' %b│%b\n' "$color" "$R"
 }
 
 center_text() {
@@ -336,7 +294,7 @@ center_text() {
     left=$(((available - width) / 2))
     right=$((available - width - left))
 
-    printf '%*s%b%*s' "$left" "" "$content" "$right" ""
+    printf '%*s%b%*s' "$left" '' "$content" "$right" ''
 }
 
 # --------------------------------------------------------------
@@ -347,37 +305,41 @@ CARD_WIDTH=24
 
 card_top() {
     local color="$1"
-    local line
 
-    line="$(repeat_char '─' "$CARD_WIDTH")"
-    printf '%b┌%s┐%b' "$color" "$line" "$R"
+    printf '%b┌' "$color"
+    repeat_char '─' "$CARD_WIDTH"
+    printf '┐%b' "$R"
 }
 
 card_bottom() {
     local color="$1"
-    local line
 
-    line="$(repeat_char '─' "$CARD_WIDTH")"
-    printf '%b└%s┘%b' "$color" "$line" "$R"
+    printf '%b└' "$color"
+    repeat_char '─' "$CARD_WIDTH"
+    printf '┘%b' "$R"
 }
 
 card_row() {
     local color="$1"
     local content="$2"
-    local width padding
+    local width padding max_width
 
+    max_width=$((CARD_WIDTH - 2))
     width="$(visible_width "$content")"
 
-    if (( width > CARD_WIDTH - 2 )); then
-        content="${content:0:$((CARD_WIDTH - 5))}..."
+    if (( width > max_width )); then
+        content="$(strip_ansi "$content")"
+        content="${content:0:max_width}"
         width="$(visible_width "$content")"
     fi
 
-    padding=$((CARD_WIDTH - 2 - width))
+    padding=$((max_width - width))
     (( padding < 0 )) && padding=0
 
-    printf '%b│%b %s%*s %b│%b' \
-        "$color" "$R" "$content" "$padding" "" "$color" "$R"
+    printf '%b│%b ' "$color" "$R"
+    printf '%b' "$content"
+    printf '%*s' "$padding" ''
+    printf ' %b│%b' "$color" "$R"
 }
 
 # --------------------------------------------------------------
@@ -399,15 +361,9 @@ record_result() {
     STEP_DETAILS+=("$detail")
 
     case "$result" in
-        OK)
-            ((TOTAL_OK += 1))
-            ;;
-        FAIL)
-            ((TOTAL_FAIL += 1))
-            ;;
-        SKIP)
-            ((TOTAL_SKIP += 1))
-            ;;
+        OK)   ((TOTAL_OK += 1)) ;;
+        FAIL) ((TOTAL_FAIL += 1)) ;;
+        SKIP) ((TOTAL_SKIP += 1)) ;;
     esac
 
     log_message "$result | $name | $detail"
@@ -430,10 +386,10 @@ run_step() {
     rc=$?
 
     if (( rc == 0 )); then
-        printf '%b  └─ ✔ Completado correctamente%b\n' "$GREEN" "$R"
+        printf '%b  └─ [OK] Completado correctamente%b\n' "$GREEN" "$R"
         record_result "$name" "OK" "Completada"
     else
-        printf '%b  └─ ✖ Error (código %s)%b\n' "$RED" "$rc" "$R"
+        printf '%b  └─ [ERROR] Código %s%b\n' "$RED" "$rc" "$R"
 
         if [[ -n "$output" ]]; then
             printf '%b%s%b\n' "$GRAY" "$output" "$R"
@@ -465,8 +421,8 @@ header() {
     box_top "$CYAN"
     box_row "$CYAN" ""
     box_row "$CYAN" "$(center_text "${CYAN}${B}LINUX CLEANUP MANAGER${R}" "$((BOX_WIDTH - 2))")"
-    box_row "$CYAN" "$(center_text "${WHITE}CENTRO DE CONTROL DEL SISTEMA${R}" "$((BOX_WIDTH - 2))")"
-    box_row "$CYAN" "$(center_text "${GRAY}Limpieza · Mantenimiento · Diagnóstico${R}" "$((BOX_WIDTH - 2))")"
+    box_row "$CYAN" "$(center_text "${WHITE}${B}CENTRO DE CONTROL DEL SISTEMA${R}" "$((BOX_WIDTH - 2))")"
+    box_row "$CYAN" "$(center_text "${GRAY}Limpieza · Mantenimiento · Diagnóstico${R}" "$((BOX_WIDTH - 2))")
     box_row "$CYAN" ""
     box_bottom "$CYAN"
 
@@ -486,6 +442,7 @@ show_dashboard() {
     local disk_total disk_free disk_used
     local apt_size tmp_size
     local mem_pct disk_pct
+    local card_gap card_pair_width card_left_padding
 
     total="$(safe_number "$(read_meminfo MemTotal)")"
     available="$(safe_number "$(read_meminfo MemAvailable)")"
@@ -501,11 +458,19 @@ show_dashboard() {
     mem_pct=0
     disk_pct=0
 
-    (( total > 0 )) &&
-        mem_pct=$((used * 100 / total))
+    (( total > 0 )) && mem_pct=$((used * 100 / total))
+    (( disk_total > 0 )) && disk_pct=$((disk_used * 100 / disk_total))
 
-    (( disk_total > 0 )) &&
-        disk_pct=$((disk_used * 100 / disk_total))
+    card_gap=2
+
+    # Cada tarjeta mide CARD_WIDTH + 2 columnas:
+    # una para cada borde vertical.
+    card_pair_width=$(((CARD_WIDTH + 2) * 2 + card_gap))
+
+    # Centrar el conjunto respecto al interior del cuadro principal.
+    card_left_padding=$(((BOX_WIDTH - card_pair_width) / 2 + 1))
+
+    (( card_left_padding < 0 )) && card_left_padding=0
 
     printf '\n'
     printf '%b  ◈ PANEL DE MONITOREO%b\n' "$BLUE" "$R"
@@ -514,67 +479,65 @@ show_dashboard() {
     box_row "$BLUE" "${WHITE}${B}ESTADO ACTUAL DEL VPS${R}"
     box_separator "$BLUE"
 
-    # Fila superior: RAM y disco.
-    printf '  '
+    printf '%*s' "$((card_left_padding + 2))" ""
     card_top "$GREEN"
-    printf '  '
+    printf '%*s' "$card_gap" ""
     card_top "$MAGENTA"
     printf '\n'
 
-    printf '  '
+    printf '%*s' "$((card_left_padding + 2))" ""
     card_row "$GREEN" "🧠 MEMORIA RAM"
-    printf '  '
+    printf '%*s' "$card_gap" ""
     card_row "$MAGENTA" "💽 DISCO RAÍZ"
     printf '\n'
 
-    printf '  '
+    printf '%*s' "$((card_left_padding + 2))" ""
     card_row "$GREEN" "Uso: ${mem_pct}%"
-    printf '  '
+    printf '%*s' "$card_gap" ""
     card_row "$MAGENTA" "Uso: ${disk_pct}%"
     printf '\n'
 
-    printf '  '
+    printf '%*s' "$((card_left_padding + 2))" ""
     card_row "$GREEN" "Libre: $(format_bytes "$available")"
-    printf '  '
+    printf '%*s' "$card_gap" ""
     card_row "$MAGENTA" "Libre: $(format_bytes "$disk_free")"
     printf '\n'
 
-    printf '  '
+    printf '%*s' "$((card_left_padding + 2))" ""
     card_bottom "$GREEN"
-    printf '  '
+    printf '%*s' "$card_gap" ""
     card_bottom "$MAGENTA"
     printf '\n'
 
     box_separator "$BLUE"
 
-    # Fila inferior: caché APT y temporales.
-    printf '  '
+    printf '%*s' "$((card_left_padding + 2))" ""
     card_top "$YELLOW"
-    printf '  '
+    printf '%*s' "$card_gap" ""
     card_top "$BLUE"
     printf '\n'
 
-    printf '  '
+    printf '%*s' "$((card_left_padding + 2))" ""
     card_row "$YELLOW" "📦 CACHÉ APT"
-    printf '  '
+    printf '%*s' "$card_gap" ""
     card_row "$BLUE" "🧹 TEMPORALES"
     printf '\n'
 
-    printf '  '
+    printf '%*s' "$((card_left_padding + 2))" ""
     card_row "$YELLOW" "Paquetes descargados"
-    printf '  '
+    printf '%*s' "$card_gap" ""
     card_row "$BLUE" "Directorio /tmp"
     printf '\n'
 
-    printf '  '
+    printf '%*s' "$((card_left_padding + 2))" ""
     card_row "$YELLOW" "$(format_bytes "$apt_size")"
-    printf '  '
+    printf '%*s' "$card_gap" ""
     card_row "$BLUE" "$(format_bytes "$tmp_size")"
     printf '\n'
 
-    printf '  '
+    printf '%*s' "$((card_left_padding + 2))" ""
     card_bottom "$YELLOW"
-    printf '  '
+    printf '%*s' "$card_gap" ""
     card_bottom "$BLUE"
     printf '\n'
 
@@ -608,11 +571,8 @@ show_system_info() {
     mem_pct=0
     disk_pct=0
 
-    (( total > 0 )) &&
-        mem_pct=$((used * 100 / total))
-
-    (( disk_total > 0 )) &&
-        disk_pct=$((disk_used * 100 / disk_total))
+    (( total > 0 )) && mem_pct=$((used * 100 / total))
+    (( disk_total > 0 )) && disk_pct=$((disk_used * 100 / disk_total))
 
     hostname="$(hostname 2>/dev/null || printf 'Desconocido')"
 
@@ -645,7 +605,7 @@ show_system_info() {
     box_top "$BLUE"
     box_row "$BLUE" "${WHITE}${B}🖥️  EQUIPO${R}"
     box_separator "$BLUE"
-    box_row "$BLUE" "🖥️  Hostname:   $hostname"
+    box_row "$BLUE" "🖥️  Host:       $hostname"
     box_row "$BLUE" "🐧  Sistema:    $os_name"
     box_row "$BLUE" "⏱️  Encendido:  $uptime_text"
     box_bottom "$BLUE"
@@ -681,8 +641,7 @@ show_system_info() {
     box_bottom "$YELLOW"
 
     printf '\n'
-    printf '%b  ℹ️  Datos obtenidos directamente del sistema.%b\n' \
-        "$GRAY" "$R"
+    printf '%b  ℹ️  Datos obtenidos directamente del sistema.%b\n' "$GRAY" "$R"
 }
 
 # --------------------------------------------------------------
@@ -706,13 +665,11 @@ check_environment() {
 
     for cmd in awk sed python3 df du date find journalctl sysctl sync \
                apt-get hostname uptime rm tail sleep clear touch; do
-        command -v "$cmd" >/dev/null 2>&1 ||
-            missing+=("$cmd")
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
     done
 
     if ((${#missing[@]} > 0)); then
-        printf '%b✖ Faltan comandos: %s%b\n' \
-            "$RED" "${missing[*]}" "$R"
+        printf '%b✖ Faltan comandos: %s%b\n' "$RED" "${missing[*]}" "$R"
         return 1
     fi
 
@@ -722,8 +679,7 @@ check_environment() {
     fi
 
     if ! touch "$LOG_FILE" 2>/dev/null; then
-        printf '%b✖ No se puede escribir el registro: %s%b\n' \
-            "$RED" "$LOG_FILE" "$R"
+        printf '%b✖ No se puede escribir el registro: %s%b\n' "$RED" "$LOG_FILE" "$R"
         return 1
     fi
 
@@ -803,7 +759,6 @@ perform_cleanup() {
     JOURNAL_FREED="0 B"
 
     capture_before
-
     header
 
     printf '\n'
@@ -824,18 +779,12 @@ perform_cleanup() {
     printf '\n%b  ◈ Iniciando operaciones...%b\n' "$CYAN" "$R"
 
     run_step "🔄 Sincronización de datos" sync
-
-    run_step "🧠 Liberación de caché del kernel" \
-        sysctl -w vm.drop_caches=3
-
+    run_step "🧠 Liberación de caché del kernel" sysctl -w vm.drop_caches=3
     run_step "📋 Limpieza de journals archivados" vacuum_journal
-
     run_step "📦 Limpieza de paquetes APT" apt-get clean
-
     run_step "🗑️  Limpieza de temporales antiguos" clean_tmp
 
     capture_after
-
     show_final_report
 }
 
@@ -863,8 +812,6 @@ show_final_report() {
     box_row "$GREEN" "$(center_text "${WHITE}${B}📋 RESUMEN DE OPERACIONES${R}" "$((BOX_WIDTH - 2))")"
     box_separator "$GREEN"
 
-    # Estas tres filas usan el mismo cálculo de ancho visible.
-    # ✔ y ✖ no se fuerzan a dos columnas sin VS16.
     box_row "$GREEN" "${GREEN}✔ Completadas: ${TOTAL_OK}${R}"
     box_row "$GREEN" "${RED}✖ Fallidas:    ${TOTAL_FAIL}${R}"
     box_row "$GREEN" "${YELLOW}↷ Omitidas:    ${TOTAL_SKIP}${R}"
