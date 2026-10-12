@@ -422,7 +422,7 @@ header() {
     box_row "$CYAN" ""
     box_row "$CYAN" "$(center_text "${CYAN}${B}LINUX CLEANUP MANAGER${R}" "$((BOX_WIDTH - 2))")"
     box_row "$CYAN" "$(center_text "${WHITE}${B}CENTRO DE CONTROL DEL SISTEMA${R}" "$((BOX_WIDTH - 2))")"
-    box_row "$CYAN" "$(center_text "${GRAY}Limpieza · Mantenimiento · Diagnóstico${R}" "$((BOX_WIDTH - 2))")
+    box_row "$CYAN" "$(center_text "${GRAY}Limpieza · Mantenimiento · Diagnóstico${R}" "$((BOX_WIDTH - 2))")"
     box_row "$CYAN" ""
     box_bottom "$CYAN"
 
@@ -606,7 +606,7 @@ show_system_info() {
     box_row "$BLUE" "${WHITE}${B}🖥️  EQUIPO${R}"
     box_separator "$BLUE"
     box_row "$BLUE" "🖥️  Host:       $hostname"
-    box_row "$BLUE" "🐧  Sistema:    $os_name"
+    box_row "$BLUE" "🐧 Sistema:    $os_name"
     box_row "$BLUE" "⏱️  Encendido:  $uptime_text"
     box_bottom "$BLUE"
 
