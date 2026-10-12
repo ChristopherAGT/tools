@@ -2,13 +2,14 @@
 
 # ==============================================================
 # LINUX CLEANUP MANAGER
-# Limpieza, mantenimiento y diagnóstico del sistema
+# Centro de control de limpieza, mantenimiento y diagnóstico
 # Versión: v1.2
 # Compatible con Debian / Ubuntu
 # ==============================================================
 
 set -o pipefail
 export LC_ALL=C.UTF-8
+umask 077
 
 VERSION="v1.2"
 BOX_WIDTH=58
@@ -71,24 +72,85 @@ JOURNAL_FREED="0 B"
 repeat_char() {
     local char="$1"
     local count="$2"
-    local result=""
 
     (( count < 0 )) && count=0
 
-    printf -v result '%*s' "$count" ''
-    result="${result// /$char}"
+    printf -v REPEAT_RESULT '%*s' "$count" ''
+    REPEAT_RESULT="${REPEAT_RESULT// /$char}"
 
-    printf '%s' "$result"
+    printf '%s' "$REPEAT_RESULT"
 }
 
+# Elimina secuencias ANSI antes de medir el texto.
+strip_ansi() {
+    printf '%s' "$1" |
+        sed -E $'s/\033\\[[0-?]*[ -/]*[@-~]//g'
+}
+
+# Calcula el ancho visible del texto en la terminal.
+# No cuenta secuencias ANSI ni caracteres combinados.
+# Evita contar símbolos como ✔ y ✖ como emojis de dos columnas
+# cuando no llevan selector de presentación emoji.
 visible_width() {
-    local text="$1"
+    python3 -c '
+import re
+import sys
+import unicodedata
 
-    # Retira códigos ANSI de color antes de medir el texto.
-    text="$(printf '%s' "$text" |
-        sed -E $'s/\033\\[[0-9;]*[[:alpha:]]//g')"
+text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", sys.argv[1])
 
-    printf '%s' "${#text}"
+width = 0
+previous_width = 0
+join_next = False
+
+for char in text:
+    cp = ord(char)
+
+    # Caracteres combinados y selectores de variación.
+    if (
+        unicodedata.combining(char)
+        or 0x0300 <= cp <= 0x036F
+        or 0x1AB0 <= cp <= 0x1AFF
+        or 0x1DC0 <= cp <= 0x1DFF
+        or 0xFE00 <= cp <= 0xFE0F
+        or 0xE0100 <= cp <= 0xE01EF
+    ):
+        # Un símbolo normal puede ocupar una columna y pasar a dos
+        # cuando aparece explícitamente con presentación emoji.
+        if cp == 0xFE0F and previous_width == 1:
+            width += 1
+            previous_width = 2
+        continue
+
+    # Unificador de secuencias emoji.
+    if cp == 0x200D:
+        join_next = True
+        continue
+
+    east_width = unicodedata.east_asian_width(char)
+
+    # Solo se fuerzan a dos columnas los bloques de emojis
+    # principales. Los símbolos Unicode como ✔ y ✖ conservan
+    # su ancho normal, salvo que incluyan VS16.
+    is_emoji = (
+        0x1F000 <= cp <= 0x1FAFF
+        or 0x1FC00 <= cp <= 0x1FFFF
+    )
+
+    char_width = (
+        2 if east_width in ("W", "F") or is_emoji else 1
+    )
+
+    if join_next:
+        width += max(0, char_width - previous_width)
+        join_next = False
+    else:
+        width += char_width
+
+    previous_width = char_width
+
+print(width)
+' "$1"
 }
 
 format_bytes() {
@@ -187,26 +249,74 @@ box_separator() {
     printf '%b  ├%s┤%b\n' "$color" "$line" "$R"
 }
 
+# Dibuja filas con anchura fija.
+# El ancho interior corresponde a BOX_WIDTH.
+# Las secuencias ANSI no afectan al cálculo del relleno.
 box_row() {
     local color="$1"
     local content="$2"
-    local width padding
+    local width padding max_width
+    local plain_content
 
-    # Calcula el ancho visible sin contar los colores ANSI.
+    max_width=$((BOX_WIDTH - 2))
     width="$(visible_width "$content")"
 
-    # Evita que una fila sobrepase los bordes.
-    if (( width > BOX_WIDTH - 2 )); then
-        content="${content:0:$((BOX_WIDTH - 5))}..."
+    # Si el texto excede el espacio disponible, se recorta
+    # sin dejar secuencias ANSI incompletas.
+    if (( width > max_width )); then
+        plain_content="$(strip_ansi "$content")"
+
+        content="$(
+            python3 -c '
+import sys
+import unicodedata
+
+text = sys.argv[1]
+limit = int(sys.argv[2])
+result = []
+width = 0
+previous_width = 0
+
+for char in text:
+    cp = ord(char)
+
+    if (
+        unicodedata.combining(char)
+        or 0x0300 <= cp <= 0x036F
+        or 0x1AB0 <= cp <= 0x1AFF
+        or 0x1DC0 <= cp <= 0x1DFF
+        or 0xFE00 <= cp <= 0xFE0F
+        or 0xE0100 <= cp <= 0xE01EF
+        or cp == 0x200D
+    ):
+        result.append(char)
+        continue
+
+    east_width = unicodedata.east_asian_width(char)
+    is_emoji = 0x1F000 <= cp <= 0x1FAFF or 0x1FC00 <= cp <= 0x1FFFF
+
+    char_width = (
+        2 if east_width in ("W", "F") or is_emoji else 1
+    )
+
+    if width + char_width > limit:
+        break
+
+    result.append(char)
+    width += char_width
+    previous_width = char_width
+
+print("".join(result), end="")
+' "$plain_content" "$max_width"
+        )"
+
         width="$(visible_width "$content")"
     fi
 
-    # Una columna de margen a cada lado del contenido.
-    padding=$((BOX_WIDTH - width - 2))
+    padding=$((max_width - width))
     (( padding < 0 )) && padding=0
 
-    # Corrección: el borde derecho se imprime inmediatamente
-    # después del espacio final, sin desplazarlo una columna.
+    # El borde derecho queda siempre en la misma columna.
     printf '%b  │%b %s%*s %b│%b\n' \
         "$color" "$R" "$content" "$padding" "" "$color" "$R"
 }
@@ -230,6 +340,47 @@ center_text() {
 }
 
 # --------------------------------------------------------------
+# TARJETAS DEL DASHBOARD
+# --------------------------------------------------------------
+
+CARD_WIDTH=24
+
+card_top() {
+    local color="$1"
+    local line
+
+    line="$(repeat_char '─' "$CARD_WIDTH")"
+    printf '%b┌%s┐%b' "$color" "$line" "$R"
+}
+
+card_bottom() {
+    local color="$1"
+    local line
+
+    line="$(repeat_char '─' "$CARD_WIDTH")"
+    printf '%b└%s┘%b' "$color" "$line" "$R"
+}
+
+card_row() {
+    local color="$1"
+    local content="$2"
+    local width padding
+
+    width="$(visible_width "$content")"
+
+    if (( width > CARD_WIDTH - 2 )); then
+        content="${content:0:$((CARD_WIDTH - 5))}..."
+        width="$(visible_width "$content")"
+    fi
+
+    padding=$((CARD_WIDTH - 2 - width))
+    (( padding < 0 )) && padding=0
+
+    printf '%b│%b %s%*s %b│%b' \
+        "$color" "$R" "$content" "$padding" "" "$color" "$R"
+}
+
+# --------------------------------------------------------------
 # REGISTRO
 # --------------------------------------------------------------
 
@@ -248,9 +399,15 @@ record_result() {
     STEP_DETAILS+=("$detail")
 
     case "$result" in
-        OK)   ((TOTAL_OK += 1)) ;;
-        FAIL) ((TOTAL_FAIL += 1)) ;;
-        SKIP) ((TOTAL_SKIP += 1)) ;;
+        OK)
+            ((TOTAL_OK += 1))
+            ;;
+        FAIL)
+            ((TOTAL_FAIL += 1))
+            ;;
+        SKIP)
+            ((TOTAL_SKIP += 1))
+            ;;
     esac
 
     log_message "$result | $name | $detail"
@@ -266,16 +423,17 @@ run_step() {
 
     local output rc
 
-    printf '\n%b  ⚙ %s%b\n' "$CYAN" "$name" "$R"
+    printf '\n%b  ⚙️  %s%b\n' "$CYAN" "$name" "$R"
+    printf '%b  ├─ Ejecutando operación...%b\n' "$GRAY" "$R"
 
     output="$("$@" 2>&1)"
     rc=$?
 
     if (( rc == 0 )); then
-        printf '%b  ✔ Completado%b\n' "$GREEN" "$R"
+        printf '%b  └─ ✔ Completado correctamente%b\n' "$GREEN" "$R"
         record_result "$name" "OK" "Completada"
     else
-        printf '%b  ✖ Error (código %s)%b\n' "$RED" "$rc" "$R"
+        printf '%b  └─ ✖ Error (código %s)%b\n' "$RED" "$rc" "$R"
 
         if [[ -n "$output" ]]; then
             printf '%b%s%b\n' "$GRAY" "$output" "$R"
@@ -296,28 +454,137 @@ run_step() {
 }
 
 # --------------------------------------------------------------
-# ENCABEZADO
+# ENCABEZADO PRINCIPAL
 # --------------------------------------------------------------
 
 header() {
     clear 2>/dev/null || true
 
     printf '\n'
+
     box_top "$CYAN"
     box_row "$CYAN" ""
-    box_row "$CYAN" "$(center_text "${WHITE}${B}LINUX CLEANUP MANAGER${R}" "$((BOX_WIDTH - 2))")"
-    box_row "$CYAN" "$(center_text "${GRAY}LIMPIEZA Y DIAGNOSTICO DEL SISTEMA${R}" "$((BOX_WIDTH - 2))")"
+    box_row "$CYAN" "$(center_text "${CYAN}${B}LINUX CLEANUP MANAGER${R}" "$((BOX_WIDTH - 2))")"
+    box_row "$CYAN" "$(center_text "${WHITE}CENTRO DE CONTROL DEL SISTEMA${R}" "$((BOX_WIDTH - 2))")"
+    box_row "$CYAN" "$(center_text "${GRAY}Limpieza · Mantenimiento · Diagnóstico${R}" "$((BOX_WIDTH - 2))")"
     box_row "$CYAN" ""
     box_bottom "$CYAN"
 
     printf '\n'
+
     box_top "$GRAY"
-    box_row "$GRAY" "${GREEN}● Sistema listo${R}                         ${YELLOW}${VERSION}${R}"
+    box_row "$GRAY" "${GREEN}● Sistema preparado${R}                 ${YELLOW}Versión ${VERSION}${R}"
     box_bottom "$GRAY"
 }
 
 # --------------------------------------------------------------
-# INFORMACIÓN DEL SISTEMA
+# DASHBOARD: CUATRO TARJETAS 2 X 2
+# --------------------------------------------------------------
+
+show_dashboard() {
+    local total available used
+    local disk_total disk_free disk_used
+    local apt_size tmp_size
+    local mem_pct disk_pct
+
+    total="$(safe_number "$(read_meminfo MemTotal)")"
+    available="$(safe_number "$(read_meminfo MemAvailable)")"
+    used=$((total - available))
+
+    disk_total="$(safe_number "$(read_disk_total)")"
+    disk_free="$(safe_number "$(read_disk_available)")"
+    disk_used="$(safe_number "$(read_disk_used)")"
+
+    apt_size="$(safe_number "$(read_directory_size /var/cache/apt/archives)")"
+    tmp_size="$(safe_number "$(read_directory_size /tmp)")"
+
+    mem_pct=0
+    disk_pct=0
+
+    (( total > 0 )) &&
+        mem_pct=$((used * 100 / total))
+
+    (( disk_total > 0 )) &&
+        disk_pct=$((disk_used * 100 / disk_total))
+
+    printf '\n'
+    printf '%b  ◈ PANEL DE MONITOREO%b\n' "$BLUE" "$R"
+
+    box_top "$BLUE"
+    box_row "$BLUE" "${WHITE}${B}ESTADO ACTUAL DEL VPS${R}"
+    box_separator "$BLUE"
+
+    # Fila superior: RAM y disco.
+    printf '  '
+    card_top "$GREEN"
+    printf '  '
+    card_top "$MAGENTA"
+    printf '\n'
+
+    printf '  '
+    card_row "$GREEN" "🧠 MEMORIA RAM"
+    printf '  '
+    card_row "$MAGENTA" "💽 DISCO RAÍZ"
+    printf '\n'
+
+    printf '  '
+    card_row "$GREEN" "Uso: ${mem_pct}%"
+    printf '  '
+    card_row "$MAGENTA" "Uso: ${disk_pct}%"
+    printf '\n'
+
+    printf '  '
+    card_row "$GREEN" "Libre: $(format_bytes "$available")"
+    printf '  '
+    card_row "$MAGENTA" "Libre: $(format_bytes "$disk_free")"
+    printf '\n'
+
+    printf '  '
+    card_bottom "$GREEN"
+    printf '  '
+    card_bottom "$MAGENTA"
+    printf '\n'
+
+    box_separator "$BLUE"
+
+    # Fila inferior: caché APT y temporales.
+    printf '  '
+    card_top "$YELLOW"
+    printf '  '
+    card_top "$BLUE"
+    printf '\n'
+
+    printf '  '
+    card_row "$YELLOW" "📦 CACHÉ APT"
+    printf '  '
+    card_row "$BLUE" "🧹 TEMPORALES"
+    printf '\n'
+
+    printf '  '
+    card_row "$YELLOW" "Paquetes descargados"
+    printf '  '
+    card_row "$BLUE" "Directorio /tmp"
+    printf '\n'
+
+    printf '  '
+    card_row "$YELLOW" "$(format_bytes "$apt_size")"
+    printf '  '
+    card_row "$BLUE" "$(format_bytes "$tmp_size")"
+    printf '\n'
+
+    printf '  '
+    card_bottom "$YELLOW"
+    printf '  '
+    card_bottom "$BLUE"
+    printf '\n'
+
+    box_separator "$BLUE"
+    box_row "$BLUE" "${GRAY}📈 Valores actuales del sistema.${R}"
+    box_bottom "$BLUE"
+}
+
+# --------------------------------------------------------------
+# INFORMACIÓN DETALLADA DEL SISTEMA
 # --------------------------------------------------------------
 
 show_system_info() {
@@ -373,19 +640,19 @@ show_system_info() {
     fi
 
     printf '\n'
-    printf '%b  📊 INFORMACIÓN DEL SISTEMA%b\n' "$BLUE" "$R"
+    printf '%b  📊 INFORMACIÓN DETALLADA%b\n' "$BLUE" "$R"
 
     box_top "$BLUE"
-    box_row "$BLUE" "${WHITE}${B}EQUIPO${R}"
+    box_row "$BLUE" "${WHITE}${B}🖥️  EQUIPO${R}"
     box_separator "$BLUE"
-    box_row "$BLUE" "Host:       $hostname"
-    box_row "$BLUE" "Sistema:    $os_name"
-    box_row "$BLUE" "Encendido:  $uptime_text"
+    box_row "$BLUE" "🖥️  Hostname:       $hostname"
+    box_row "$BLUE" "🐧  Sistema:    $os_name"
+    box_row "$BLUE" "⏱️  Encendido:  $uptime_text"
     box_bottom "$BLUE"
 
     printf '\n'
     box_top "$CYAN"
-    box_row "$CYAN" "${WHITE}${B}MEMORIA RAM${R}"
+    box_row "$CYAN" "${WHITE}${B}🧠 MEMORIA RAM${R}"
     box_separator "$CYAN"
     box_row "$CYAN" "Total:       $(format_bytes "$total")"
     box_row "$CYAN" "Utilizada:   $(format_bytes "$used") (${mem_pct}%)"
@@ -395,7 +662,7 @@ show_system_info() {
 
     printf '\n'
     box_top "$MAGENTA"
-    box_row "$MAGENTA" "${WHITE}${B}ALMACENAMIENTO${R}"
+    box_row "$MAGENTA" "${WHITE}${B}💽 ALMACENAMIENTO${R}"
     box_separator "$MAGENTA"
     box_row "$MAGENTA" "Disco total:      $(format_bytes "$disk_total")"
     box_row "$MAGENTA" "Espacio usado:    $(format_bytes "$disk_used")"
@@ -406,7 +673,7 @@ show_system_info() {
 
     printf '\n'
     box_top "$YELLOW"
-    box_row "$YELLOW" "${WHITE}${B}MEMORIA SWAP${R}"
+    box_row "$YELLOW" "${WHITE}${B}🔄 MEMORIA SWAP${R}"
     box_separator "$YELLOW"
     box_row "$YELLOW" "Total:       $(format_bytes "$swap_total")"
     box_row "$YELLOW" "Utilizada:   $(format_bytes "$swap_used")"
@@ -414,7 +681,7 @@ show_system_info() {
     box_bottom "$YELLOW"
 
     printf '\n'
-    printf '%b  ℹ Los valores reflejan el estado actual del sistema.%b\n' \
+    printf '%b  ℹ️  Datos obtenidos directamente del sistema.%b\n' \
         "$GRAY" "$R"
 }
 
@@ -426,9 +693,21 @@ check_environment() {
     local missing=()
     local cmd
 
-    for cmd in awk sed df du date find journalctl sysctl sync \
-               apt-get hostname uptime free rm; do
-        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    if [[ $EUID -ne 0 ]]; then
+        printf '%b✖ Ejecuta el script como root o con sudo.%b\n' "$RED" "$R"
+        printf '%b  💡 Ejemplo: sudo bash cleanup-manager.sh%b\n' "$GRAY" "$R"
+        return 1
+    fi
+
+    if ! command -v apt-get >/dev/null 2>&1; then
+        printf '%b✖ Este script requiere Debian/Ubuntu con APT.%b\n' "$RED" "$R"
+        return 1
+    fi
+
+    for cmd in awk sed python3 df du date find journalctl sysctl sync \
+               apt-get hostname uptime rm tail sleep clear touch; do
+        command -v "$cmd" >/dev/null 2>&1 ||
+            missing+=("$cmd")
     done
 
     if ((${#missing[@]} > 0)); then
@@ -437,14 +716,14 @@ check_environment() {
         return 1
     fi
 
-    if [[ $EUID -ne 0 ]]; then
-        printf '%b✖ Ejecuta el script como root o con sudo.%b\n' "$RED" "$R"
-        printf '%b  Ejemplo: sudo bash cleanup-manager.sh%b\n' "$GRAY" "$R"
+    if [[ ! -r /proc/meminfo ]]; then
+        printf '%b✖ No se puede leer /proc/meminfo.%b\n' "$RED" "$R"
         return 1
     fi
 
-    if ! command -v apt-get >/dev/null 2>&1; then
-        printf '%b✖ Este script requiere Debian/Ubuntu con APT.%b\n' "$RED" "$R"
+    if ! touch "$LOG_FILE" 2>/dev/null; then
+        printf '%b✖ No se puede escribir el registro: %s%b\n' \
+            "$RED" "$LOG_FILE" "$R"
         return 1
     fi
 
@@ -485,7 +764,8 @@ vacuum_journal() {
 
     JOURNAL_FREED="$(
         printf '%s\n' "$output" |
-            sed -nE 's/.*freed ([^ ]+) of archived journals.*/\1/p' |
+            sed -nE \
+                's/.*freed[[:space:]]+([^[:space:]]+)[[:space:]]+of archived journals.*/\1/p' |
             tail -n 1
     )"
 
@@ -519,6 +799,7 @@ perform_cleanup() {
     TOTAL_OK=0
     TOTAL_FAIL=0
     TOTAL_SKIP=0
+
     JOURNAL_FREED="0 B"
 
     capture_before
@@ -526,29 +807,32 @@ perform_cleanup() {
     header
 
     printf '\n'
+    printf '%b  🚀 PREPARANDO MANTENIMIENTO%b\n' "$CYAN" "$R"
+
     box_top "$YELLOW"
-    box_row "$YELLOW" "${WHITE}${B}LIMPIEZA AUTOMATICA${R}"
+    box_row "$YELLOW" "${WHITE}${B}🧹 LIMPIEZA AUTOMÁTICA${R}"
     box_separator "$YELLOW"
-    box_row "$YELLOW" "Se ejecutarán las tareas seguras:"
-    box_row "$YELLOW" "1. Sincronizar datos pendientes"
-    box_row "$YELLOW" "2. Liberar cachés recuperables del kernel"
-    box_row "$YELLOW" "3. Retirar journals archivados de más de 3 días"
-    box_row "$YELLOW" "4. Limpiar paquetes descargados de APT"
-    box_row "$YELLOW" "5. Retirar elementos antiguos de /tmp"
+    box_row "$YELLOW" "${GREEN}01${R}  🔄 Sincronizar datos pendientes"
+    box_row "$YELLOW" "${GREEN}02${R}  🧠 Liberar cachés recuperables del kernel"
+    box_row "$YELLOW" "${GREEN}03${R}  📋 Limpiar journals archivados de más de 3 días"
+    box_row "$YELLOW" "${GREEN}04${R}  📦 Limpiar paquetes descargados de APT"
+    box_row "$YELLOW" "${GREEN}05${R}  🗑️  Retirar elementos antiguos de /tmp"
+    box_separator "$YELLOW"
+    box_row "$YELLOW" "${GRAY}ℹ️  Se mantienen los comandos y criterios originales.${R}"
     box_bottom "$YELLOW"
 
-    printf '\n%b  🚀 Iniciando limpieza...%b\n' "$CYAN" "$R"
+    printf '\n%b  ◈ Iniciando operaciones...%b\n' "$CYAN" "$R"
 
-    run_step "Sincronización de datos" sync
+    run_step "🔄 Sincronización de datos" sync
 
-    run_step "Liberación de caché del kernel" \
+    run_step "🧠 Liberación de caché del kernel" \
         sysctl -w vm.drop_caches=3
 
-    run_step "Limpieza de journals archivados" vacuum_journal
+    run_step "📋 Limpieza de journals archivados" vacuum_journal
 
-    run_step "Limpieza de paquetes APT" apt-get clean
+    run_step "📦 Limpieza de paquetes APT" apt-get clean
 
-    run_step "Limpieza de temporales antiguos" clean_tmp
+    run_step "🗑️  Limpieza de temporales antiguos" clean_tmp
 
     capture_after
 
@@ -570,31 +854,36 @@ show_final_report() {
     disk_diff=$((DISK_BEFORE - DISK_AFTER))
     apt_diff=$((APT_BEFORE - APT_AFTER))
     tmp_diff=$((TMP_BEFORE - TMP_AFTER))
-    cache_diff=$((CACHE_BEFORE - CACHE_AFTER))
+    cache_diff=$((CACHE_AFTER - CACHE_BEFORE))
 
     printf '\n\n'
-    printf '%b  📋 RESUMEN DE LA LIMPIEZA%b\n' "$GREEN" "$R"
+    printf '%b  🏆 INFORME FINAL DE MANTENIMIENTO%b\n' "$GREEN" "$R"
 
     box_top "$GREEN"
-    box_row "$GREEN" "${WHITE}${B}RESULTADO DE OPERACIONES${R}"
+    box_row "$GREEN" "$(center_text "${WHITE}${B}📋 RESUMEN DE OPERACIONES${R}" "$((BOX_WIDTH - 2))")"
     box_separator "$GREEN"
+
+    # Estas tres filas usan el mismo cálculo de ancho visible.
+    # ✔ y ✖ no se fuerzan a dos columnas sin VS16.
     box_row "$GREEN" "${GREEN}✔ Completadas: ${TOTAL_OK}${R}"
     box_row "$GREEN" "${RED}✖ Fallidas:    ${TOTAL_FAIL}${R}"
     box_row "$GREEN" "${YELLOW}↷ Omitidas:    ${TOTAL_SKIP}${R}"
 
     box_separator "$GREEN"
-    box_row "$GREEN" "${WHITE}${B}CAMBIOS OBSERVADOS${R}"
-    box_row "$GREEN" "RAM disponible antes:  $(format_bytes "$MEM_BEFORE")"
+    box_row "$GREEN" "${WHITE}${B}📈 CAMBIOS OBSERVADOS${R}"
+    box_separator "$GREEN"
+
+    box_row "$GREEN" "RAM disponible antes:   $(format_bytes "$MEM_BEFORE")"
     box_row "$GREEN" "RAM disponible después: $(format_bytes "$MEM_AFTER")"
 
     if (( mem_diff >= 0 )); then
-        box_row "$GREEN" "Variación RAM disponible: +$(format_bytes "$mem_diff")"
+        box_row "$GREEN" "Variación RAM: +$(format_bytes "$mem_diff")"
     else
-        box_row "$GREEN" "Variación RAM disponible: -$(format_bytes "$((-mem_diff))")"
+        box_row "$GREEN" "Variación RAM: -$(format_bytes "$((-mem_diff))")"
     fi
 
-    box_row "$GREEN" "Caché de archivos antes:  $(format_bytes "$CACHE_BEFORE")"
-    box_row "$GREEN" "Caché de archivos después: $(format_bytes "$CACHE_AFTER")"
+    box_row "$GREEN" "Caché archivos antes:   $(format_bytes "$CACHE_BEFORE")"
+    box_row "$GREEN" "Caché archivos después: $(format_bytes "$CACHE_AFTER")"
 
     if (( disk_diff >= 0 )); then
         box_row "$GREEN" "Reducción uso de disco: +$(format_bytes "$disk_diff")"
@@ -602,30 +891,55 @@ show_final_report() {
         box_row "$GREEN" "Cambio uso de disco: -$(format_bytes "$((-disk_diff))")"
     fi
 
-    box_row "$GREEN" "Caché APT antes:  $(format_bytes "$APT_BEFORE")"
-    box_row "$GREEN" "Caché APT después: $(format_bytes "$APT_AFTER")"
-    box_row "$GREEN" "Cambio caché APT: $(format_bytes "$((apt_diff < 0 ? -apt_diff : apt_diff))")"
+    box_separator "$GREEN"
+    box_row "$GREEN" "${WHITE}${B}📦 CACHÉ DE PAQUETES${R}"
+    box_row "$GREEN" "APT antes:   $(format_bytes "$APT_BEFORE")"
+    box_row "$GREEN" "APT después: $(format_bytes "$APT_AFTER")"
 
-    box_row "$GREEN" "Temporales antes:  $(format_bytes "$TMP_BEFORE")"
-    box_row "$GREEN" "Temporales después: $(format_bytes "$TMP_AFTER")"
+    if (( apt_diff >= 0 )); then
+        box_row "$GREEN" "Reducción caché APT: $(format_bytes "$apt_diff")"
+    else
+        box_row "$GREEN" "Aumento caché APT: $(format_bytes "$((-apt_diff))")"
+    fi
+
+    box_separator "$GREEN"
+    box_row "$GREEN" "${WHITE}${B}🗑️  ARCHIVOS TEMPORALES${R}"
+    box_row "$GREEN" "Antes:   $(format_bytes "$TMP_BEFORE")"
+    box_row "$GREEN" "Después: $(format_bytes "$TMP_AFTER")"
+
+    if (( tmp_diff >= 0 )); then
+        box_row "$GREEN" "Reducción /tmp: $(format_bytes "$tmp_diff")"
+    else
+        box_row "$GREEN" "Aumento /tmp: $(format_bytes "$((-tmp_diff))")"
+    fi
+
     box_row "$GREEN" "Journals eliminados: ${JOURNAL_FREED}"
 
     box_separator "$GREEN"
+    box_row "$GREEN" "${WHITE}${B}⏱️  EJECUCIÓN${R}"
     box_row "$GREEN" "Duración: ${elapsed} segundos"
     box_row "$GREEN" "Fecha: $(date '+%Y-%m-%d %H:%M:%S')"
     box_bottom "$GREEN"
 
     printf '\n'
-    printf '%b  💡 INFORMACIÓN IMPORTANTE%b\n' "$CYAN" "$R"
-    printf '%b  • La variación de RAM no equivale a memoria garantizada como liberada.%b\n' "$GRAY" "$R"
-    printf '%b  • Liberar caché puede hacer que algunas operaciones posteriores sean más lentas.%b\n' "$GRAY" "$R"
-    printf '%b  • Solo se intenta limpiar contenido visible y antiguo de /tmp.%b\n' "$GRAY" "$R"
-    printf '%b  • Los journals archivados eliminados ya no estarán disponibles.%b\n' "$GRAY" "$R"
-    printf '%b  • Registro: %s%b\n' "$GRAY" "$LOG_FILE" "$R"
+    printf '%b  💡 NOTAS DEL SISTEMA%b\n' "$CYAN" "$R"
+
+    box_top "$CYAN"
+    box_row "$CYAN" "ℹ️  La variación de RAM no garantiza memoria liberada."
+    box_row "$CYAN" "⚠️  Vaciar cachés puede ralentizar accesos posteriores."
+    box_row "$CYAN" "🗑️  /tmp elimina elementos antiguos no ocultos."
+    box_row "$CYAN" "📋 Los journals eliminados dejan de estar disponibles."
+    box_separator "$CYAN"
+    box_row "$CYAN" "📄 Registro de operaciones:"
+    box_row "$CYAN" "$LOG_FILE"
+    box_bottom "$CYAN"
 
     log_message "Limpieza finalizada | OK=$TOTAL_OK FAIL=$TOTAL_FAIL SKIP=$TOTAL_SKIP | duración=${elapsed}s"
 
-    printf '\n%b  ✔ Limpieza finalizada.%b\n' "$GREEN" "$R"
+    printf '\n'
+    box_top "$GREEN"
+    box_row "$GREEN" "$(center_text "${GREEN}${B}✅ MANTENIMIENTO FINALIZADO${R}" "$((BOX_WIDTH - 2))")"
+    box_bottom "$GREEN"
 }
 
 # --------------------------------------------------------------
@@ -634,7 +948,6 @@ show_final_report() {
 
 main() {
     local option
-    local total available used disk_free disk_total mem_pct disk_pct
 
     if ! check_environment; then
         exit 1
@@ -642,43 +955,20 @@ main() {
 
     while true; do
         header
+        show_dashboard
 
         printf '\n'
-        box_top "$BLUE"
-        box_row "$BLUE" "${WHITE}${B}ESTADO ACTUAL${R}"
-        box_separator "$BLUE"
 
-        total="$(safe_number "$(read_meminfo MemTotal)")"
-        available="$(safe_number "$(read_meminfo MemAvailable)")"
-        used=$((total - available))
-        disk_free="$(safe_number "$(read_disk_available)")"
-        disk_total="$(safe_number "$(read_disk_total)")"
-
-        mem_pct=0
-        disk_pct=0
-
-        (( total > 0 )) &&
-            mem_pct=$((used * 100 / total))
-
-        (( disk_total > 0 )) &&
-            disk_pct=$(((disk_total - disk_free) * 100 / disk_total))
-
-        box_row "$BLUE" "RAM disponible: $(format_bytes "$available")"
-        box_row "$BLUE" "RAM utilizada:  ${mem_pct}%"
-        box_row "$BLUE" "Disco utilizado: ${disk_pct}%"
-        box_row "$BLUE" "Disco libre:     $(format_bytes "$disk_free")"
-        box_bottom "$BLUE"
-
-        printf '\n'
         box_top "$CYAN"
-        box_row "$CYAN" "${WHITE}${B}CENTRO DE CONTROL${R}"
+        box_row "$CYAN" "$(center_text "${WHITE}${B}🎛️  CENTRO DE CONTROL${R}" "$((BOX_WIDTH - 2))")"
         box_separator "$CYAN"
-        box_row "$CYAN" "${GREEN}[1]${R}  🧹 Ejecutar limpieza completa"
+        box_row "$CYAN" "${GREEN}[1]${R}  🚀 Ejecutar limpieza completa"
         box_row "$CYAN" "${BLUE}[2]${R}  📊 Información detallada del sistema"
-        box_row "$CYAN" "${RED}[3]${R}  🚪 Salir"
+        box_row "$CYAN" "${RED}[0]${R}  🚪 Salir del administrador"
         box_bottom "$CYAN"
 
-        printf '\n%b  Selecciona una opción [1-3]: %b' "$CYAN" "$R"
+        printf '\n'
+        printf '%b  ➤ Selecciona una opción [0-2]: %b' "$CYAN" "$R"
 
         if ! read -r option; then
             printf '\n'
@@ -697,12 +987,12 @@ main() {
                 printf '\n'
                 read -r -p "Presiona ENTER para volver al menú..." _
                 ;;
-            3)
+            0)
                 printf '\n%b  👋 Hasta pronto.%b\n' "$GREEN" "$R"
                 exit 0
                 ;;
             *)
-                printf '\n%b  ⚠ Opción inválida. Selecciona 1, 2 o 3.%b\n' "$YELLOW" "$R"
+                printf '\n%b  ⚠️  Opción inválida. Selecciona 0, 1 o 2.%b\n' "$YELLOW" "$R"
                 sleep 1
                 ;;
         esac
