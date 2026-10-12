@@ -645,7 +645,7 @@ show_system_info() {
     box_top "$BLUE"
     box_row "$BLUE" "${WHITE}${B}🖥️  EQUIPO${R}"
     box_separator "$BLUE"
-    box_row "$BLUE" "🖥️  Hostname:       $hostname"
+    box_row "$BLUE" "🖥️  Hostname:   $hostname"
     box_row "$BLUE" "🐧  Sistema:    $os_name"
     box_row "$BLUE" "⏱️  Encendido:  $uptime_text"
     box_bottom "$BLUE"
