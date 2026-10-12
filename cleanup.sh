@@ -3,7 +3,7 @@
 # ==============================================================
 # LINUX CLEANUP MANAGER
 # Centro de control de limpieza, mantenimiento y diagnóstico
-# Versión: v1.2
+# Versión: v1.0
 # Compatible con Debian / Ubuntu
 # ==============================================================
 
