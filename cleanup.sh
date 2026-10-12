@@ -11,7 +11,7 @@ set -o pipefail
 export LC_ALL=C.UTF-8
 umask 077
 
-VERSION="v1.2"
+VERSION="v1.0"
 BOX_WIDTH=58
 TMP_MAX_AGE=1440
 LOG_FILE="/var/log/cleanup-manager.log"
@@ -125,9 +125,8 @@ for char in text:
 
     east_width = unicodedata.east_asian_width(char)
 
-    # Los tres símbolos del resumen se cuentan como caracteres
-    # de texto de una columna, evitando diferencias de ancho
-    # entre fuentes y terminales.
+    # Los símbolos del resumen se cuentan como caracteres
+    # de una columna para mantener la alineación.
     if cp in (0x2714, 0x2716, 0x21B7):
         char_width = 1
     else:
@@ -429,12 +428,28 @@ header() {
     printf '\n'
 
     box_top "$GRAY"
-    box_row "$GRAY" "${GREEN}● Sistema preparado${R}                 ${YELLOW}Versión ${VERSION}${R}"
+
+    # Alinear la versión con el borde derecho del cuadro.
+    local status_text version_text available_width status_width version_width gap
+
+    status_text="${GREEN}● Sistema preparado${R}"
+    version_text="${YELLOW}Versión ${VERSION}${R}"
+
+    available_width=$((BOX_WIDTH - 2))
+    status_width="$(visible_width "$status_text")"
+    version_width="$(visible_width "$version_text")"
+
+    gap=$((available_width - status_width - version_width))
+    (( gap < 1 )) && gap=1
+
+    box_row "$GRAY" "${status_text}$(printf '%*s' "$gap" '')${version_text}"
     box_bottom "$GRAY"
 }
 
 # --------------------------------------------------------------
 # DASHBOARD: CUATRO TARJETAS 2 X 2
+# COLORES: RAM CIAN / DISCO MAGENTA /
+#          CACHÉ APT AMARILLO / TEMPORALES VERDE
 # --------------------------------------------------------------
 
 show_dashboard() {
@@ -463,11 +478,7 @@ show_dashboard() {
 
     card_gap=2
 
-    # Cada tarjeta mide CARD_WIDTH + 2 columnas:
-    # una para cada borde vertical.
     card_pair_width=$(((CARD_WIDTH + 2) * 2 + card_gap))
-
-    # Centrar el conjunto respecto al interior del cuadro principal.
     card_left_padding=$(((BOX_WIDTH - card_pair_width) / 2 + 1))
 
     (( card_left_padding < 0 )) && card_left_padding=0
@@ -479,66 +490,68 @@ show_dashboard() {
     box_row "$BLUE" "${WHITE}${B}ESTADO ACTUAL DEL VPS${R}"
     box_separator "$BLUE"
 
+    # FILA 1: RAM CIAN / DISCO MAGENTA
     printf '%*s' "$((card_left_padding + 2))" ""
-    card_top "$GREEN"
+    card_top "$CYAN"
     printf '%*s' "$card_gap" ""
     card_top "$MAGENTA"
     printf '\n'
 
     printf '%*s' "$((card_left_padding + 2))" ""
-    card_row "$GREEN" "🧠 MEMORIA RAM"
+    card_row "$CYAN" "🧠 MEMORIA RAM"
     printf '%*s' "$card_gap" ""
     card_row "$MAGENTA" "💽 DISCO RAÍZ"
     printf '\n'
 
     printf '%*s' "$((card_left_padding + 2))" ""
-    card_row "$GREEN" "Uso: ${mem_pct}%"
+    card_row "$CYAN" "Uso: ${mem_pct}%"
     printf '%*s' "$card_gap" ""
     card_row "$MAGENTA" "Uso: ${disk_pct}%"
     printf '\n'
 
     printf '%*s' "$((card_left_padding + 2))" ""
-    card_row "$GREEN" "Libre: $(format_bytes "$available")"
+    card_row "$CYAN" "Libre: $(format_bytes "$available")"
     printf '%*s' "$card_gap" ""
     card_row "$MAGENTA" "Libre: $(format_bytes "$disk_free")"
     printf '\n'
 
     printf '%*s' "$((card_left_padding + 2))" ""
-    card_bottom "$GREEN"
+    card_bottom "$CYAN"
     printf '%*s' "$card_gap" ""
     card_bottom "$MAGENTA"
     printf '\n'
 
     box_separator "$BLUE"
 
+    # FILA 2: CACHÉ APT AMARILLO / TEMPORALES VERDE
     printf '%*s' "$((card_left_padding + 2))" ""
     card_top "$YELLOW"
     printf '%*s' "$card_gap" ""
-    card_top "$BLUE"
+    card_top "$GREEN"
     printf '\n'
 
     printf '%*s' "$((card_left_padding + 2))" ""
     card_row "$YELLOW" "📦 CACHÉ APT"
     printf '%*s' "$card_gap" ""
-    card_row "$BLUE" "🧹 TEMPORALES"
+    card_row "$GREEN" "🧹 TEMPORALES"
     printf '\n'
 
     printf '%*s' "$((card_left_padding + 2))" ""
     card_row "$YELLOW" "Paquetes descargados"
     printf '%*s' "$card_gap" ""
-    card_row "$BLUE" "Directorio /tmp"
+    card_row "$GREEN" "Directorio /tmp"
     printf '\n'
 
     printf '%*s' "$((card_left_padding + 2))" ""
     card_row "$YELLOW" "$(format_bytes "$apt_size")"
     printf '%*s' "$card_gap" ""
-    card_row "$BLUE" "$(format_bytes "$tmp_size")"
+    card_row "$GREEN" "$(format_bytes "$tmp_size")"
     printf '\n'
 
     printf '%*s' "$((card_left_padding + 2))" ""
     card_bottom "$YELLOW"
     printf '%*s' "$card_gap" ""
-    card_bottom "$BLUE"
+    card_bottom "$GREEN"
     printf '\n'
 
     box_separator "$BLUE"
