@@ -1,3 +1,4 @@
+
 #!/usr/bin/env bash
 set -Eeuo pipefail
 set -o pipefail
@@ -188,17 +189,51 @@ elif command -v wget >/dev/null 2>&1; then
     )"
 fi
 
-# Validar la respuesta para evitar mostrar contenido inesperado.
-if [[ ! "$PUBLIC_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+# Validar formato y rango de la direccion IPv4 publica.
+if [[ "$PUBLIC_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    IFS='.' read -r oct1 oct2 oct3 oct4 <<< "$PUBLIC_IP"
+
+    for octet in "$oct1" "$oct2" "$oct3" "$oct4"; do
+        if (( 10#$octet > 255 )); then
+            PUBLIC_IP="No disponible"
+            break
+        fi
+    done
+else
     PUBLIC_IP="No disponible"
 fi
 
-# Detectar el sistema operativo.
+# Detectar el sistema operativo SIN cargar /etc/os-release.
+# Esto evita conflictos con la variable readonly VERSION.
 if [[ -r /etc/os-release ]]; then
     OS_NAME="$(
-        . /etc/os-release
-        printf '%s' "${PRETTY_NAME:-${NAME:-Linux}}"
+        awk -F= '
+            $1 == "PRETTY_NAME" {
+                value = substr($0, index($0, "=") + 1)
+                if (value ~ /^".*"$/ || value ~ /^'\''.*'\''$/) {
+                    value = substr(value, 2, length(value) - 2)
+                }
+                print value
+                exit
+            }
+        ' /etc/os-release
     )"
+
+    if [[ -z "$OS_NAME" ]]; then
+        OS_NAME="$(
+            awk -F= '
+                $1 == "NAME" {
+                    value = substr($0, index($0, "=") + 1)
+                    gsub(/^"/, "", value)
+                    gsub(/"$/, "", value)
+                    print value
+                    exit
+                }
+            ' /etc/os-release
+        )"
+    fi
+
+    OS_NAME="${OS_NAME:-Linux}"
 else
     OS_NAME="$(uname -s 2>/dev/null || echo Linux)"
 fi
