@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 set -Eeuo pipefail
 set -o pipefail
@@ -9,7 +8,8 @@ set -o pipefail
 # ============================================================
 #
 # FUNCIONES:
-#   - Encabezado amplio y dashboard con colores.
+#   - Encabezado compacto con colores y datos del servidor.
+#   - Deteccion de IP publica, sistema operativo y servicio.
 #   - Deteccion de interfaz, IPv4 y ruta predeterminada.
 #   - Diagnostico de systemd-resolved y resolv.conf.
 #   - Pruebas DNS y conectividad HTTPS.
@@ -22,7 +22,7 @@ set -o pipefail
 # IMPORTANTE:
 #   - Ejecutar como root.
 #   - Requiere systemd-resolved, resolvectl, ip y timeout.
-#   - curl y dig son opcionales.
+#   - curl, wget, python3 y dig son opcionales.
 #   - resolvectl aplica cambios normalmente temporales.
 #   - No modifica deliberadamente Netplan ni otros gestores.
 #
@@ -60,7 +60,8 @@ readonly ORACLE_DNS="169.254.169.254"
 readonly PUBLIC_DNS=("1.1.1.1" "8.8.8.8")
 readonly TEST_DOMAINS=("raw.githubusercontent.com" "google.com")
 readonly HTTPS_URL="https://github.com/"
-readonly SEPARATOR="  ────────────────────────────────────────────────────"
+readonly PUBLIC_IP_URL="https://api.ipify.org"
+readonly SEPARATOR="  ──────────────────────────────────────────────────"
 
 IFACE=""
 IP_ADDR=""
@@ -69,6 +70,9 @@ DNS_SOURCE=""
 BACKUP=""
 RESOLV_TARGET=""
 GLOBAL_DNS=""
+PUBLIC_IP="No disponible"
+OS_NAME="No identificado"
+START_TIME="$(date '+%d/%m/%Y %H:%M:%S')"
 
 CURRENT_DNS=()
 DNS_SERVERS=()
@@ -168,25 +172,59 @@ done
 
 clear 2>/dev/null || true
 
+# Obtener la IP publica sin detener el diagnostico si falla.
+if command -v curl >/dev/null 2>&1; then
+    PUBLIC_IP="$(
+        timeout 4 curl -4 -fsS \
+            --connect-timeout 2 \
+            --max-time 3 \
+            "$PUBLIC_IP_URL" 2>/dev/null || true
+    )"
+elif command -v wget >/dev/null 2>&1; then
+    PUBLIC_IP="$(
+        timeout 4 wget -qO- \
+            --timeout=3 \
+            "$PUBLIC_IP_URL" 2>/dev/null || true
+    )"
+fi
+
+# Validar la respuesta para evitar mostrar contenido inesperado.
+if [[ ! "$PUBLIC_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    PUBLIC_IP="No disponible"
+fi
+
+# Detectar el sistema operativo.
+if [[ -r /etc/os-release ]]; then
+    OS_NAME="$(
+        . /etc/os-release
+        printf '%s' "${PRETTY_NAME:-${NAME:-Linux}}"
+    )"
+else
+    OS_NAME="$(uname -s 2>/dev/null || echo Linux)"
+fi
+
 printf '\n'
-printf '%b\n' "${CYAN}${BOLD}  ╔══════════════════════════════════════════════════════════════════════╗${RESET}"
-printf '%b\n' "${CYAN}${BOLD}  ║                                                                      ║${RESET}"
-printf '%b\n' "${CYAN}${BOLD}  ║                                                                      ║${RESET}"
-printf '%b\n' "${CYAN}${BOLD}  ║                                                                      ║${RESET}"
-printf '%b\n' "${CYAN}${BOLD}  ║                         DNS REPAIR PRO                               ║${RESET}"
-printf '%b\n' "${CYAN}${BOLD}  ║                      NETWORK MANAGER                                 ║${RESET}"
-printf '%b\n' "${CYAN}${BOLD}  ║                                                                      ║${RESET}"
-printf '%b\n' "${CYAN}${BOLD}  ║                   DIAGNOSTICO Y REPARACION DNS                       ║${RESET}"
-printf '%b\n' "${CYAN}${BOLD}  ║                                                                      ║${RESET}"
-printf '%b\n' "${CYAN}${BOLD}  ║                                                                      ║${RESET}"
-printf '%b\n' "${CYAN}${BOLD}  ║                                                                      ║${RESET}"
-printf '%b\n' "${CYAN}${BOLD}  ╚══════════════════════════════════════════════════════════════════════╝${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  ╭──────────────────────────────────────────────────╮${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  │                                                  │${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  │                 DNS REPAIR PRO                  │${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  │                NETWORK MANAGER                  │${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  │          DIAGNOSTICO Y REPARACION DNS           │${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  │                                                  │${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  ╰──────────────────────────────────────────────────╯${RESET}"
 printf '\n'
 
-printf '  %b %-12s %s\n' "${MAGENTA}🛠️${RESET}" "Version:" "$VERSION"
-printf '  %b %-12s %s\n' "${MAGENTA}📅${RESET}" "Fecha:" "$(date '+%d/%m/%Y %H:%M:%S')"
-printf '  %b %-12s %s\n' "${MAGENTA}🖥️${RESET}" "Equipo:" "$(hostname 2>/dev/null || echo desconocido)"
-printf '  %b %-12s %s\n' "${MAGENTA}⚙️${RESET}" "Servicio:" "systemd-resolved"
+printf '  %b %-10s %b %s\n' \
+    "${BLUE}›${RESET}" "IP:" "${WHITE}" "$PUBLIC_IP"
+
+printf '  %b %-10s %b %s\n' \
+    "${MAGENTA}›${RESET}" "UPTIME:" "${WHITE}" "$START_TIME"
+
+printf '  %b %-10s %b %s\n' \
+    "${CYAN}🖥️${RESET}" "SISTEMA:" "${WHITE}" "$OS_NAME"
+
+printf '  %b %-10s %b %s\n' \
+    "${YELLOW}⚙️${RESET}" "Servicio:" "${WHITE}" "systemd-resolved"
+
 printf '\n'
 printf '  %b\n' "${GRAY}Diagnostico inteligente de conectividad DNS.${RESET}"
 printf '  %b\n' "${GRAY}Los cambios requieren tu confirmacion.${RESET}"
