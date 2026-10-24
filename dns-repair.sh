@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 set -Eeuo pipefail
 set -o pipefail
@@ -249,16 +248,16 @@ printf '%b\n' "${CYAN}${BOLD}  ╰───────────────�
 printf '\n'
 
 printf '  %b %-10s %b %s\n' \
-    "${BLUE}›${RESET}" "IP:" "${WHITE}" "$PUBLIC_IP"
+    "${BLUE}🌐${RESET}" "IP:" "${WHITE}" "$PUBLIC_IP"
 
 printf '  %b %-10s %b %s\n' \
-    "${MAGENTA}›${RESET}" "UPTIME:" "${WHITE}" "$START_TIME"
+    "${MAGENTA}⌛️${RESET}" "UPTIME:" "${WHITE}" "$START_TIME"
 
 printf '  %b %-10s %b %s\n' \
     "${CYAN}🖥️${RESET}" "SISTEMA:" "${WHITE}" "$OS_NAME"
 
 printf '  %b %-10s %b %s\n' \
-    "${YELLOW}⚙️${RESET}" "Servicio:" "${WHITE}" "systemd-resolved"
+    "${YELLOW}⚙️${RESET}" "SERVICIO:" "${WHITE}" "systemd-resolved"
 
 printf '\n'
 printf '  %b\n' "${GRAY}Diagnostico inteligente de conectividad DNS.${RESET}"
