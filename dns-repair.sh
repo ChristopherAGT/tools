@@ -158,13 +158,51 @@ fi
 
 clear 2>/dev/null || true
 
+# Ancho interior fijo del encabezado.
+# Se conserva el diseño original con bordes dobles.
+HEADER_WIDTH=50
+
+draw_header_border() {
+    printf '%b' "${CYAN}${BOLD}╔"
+    printf '%*s' "$HEADER_WIDTH" '' | tr ' ' '═'
+    printf '╗%b\n' "${RESET}"
+}
+
+draw_header_bottom() {
+    printf '%b' "${CYAN}${BOLD}╚"
+    printf '%*s' "$HEADER_WIDTH" '' | tr ' ' '═'
+    printf '╝%b\n' "${RESET}"
+}
+
+draw_header_blank() {
+    printf '%b' "${CYAN}${BOLD}║"
+    printf '%*s' "$HEADER_WIDTH" ''
+    printf '║%b\n' "${RESET}"
+}
+
+draw_header_text() {
+    local text="$1"
+    local left="$2"
+    local right="$3"
+
+    printf '%b' "${CYAN}${BOLD}║"
+    printf '%*s' "$left" ''
+    printf '%s' "$text"
+    printf '%*s' "$right" ''
+    printf '║%b\n' "${RESET}"
+}
+
 printf '\n'
-printf '%b\n' "${CYAN}${BOLD}╔══════════════════════════════════════════════════╗${RESET}"
-printf '%b\n' "${CYAN}${BOLD}║                                                  ║${RESET}"
-printf '%b\n' "${CYAN}${BOLD}║          🛡️  DNS REPAIR PRO                       ║${RESET}"
-printf '%b\n' "${CYAN}${BOLD}║          DIAGNOSTICO Y REPARACION                ║${RESET}"
-printf '%b\n' "${CYAN}${BOLD}║                                                  ║${RESET}"
-printf '%b\n' "${CYAN}${BOLD}╚══════════════════════════════════════════════════╝${RESET}"
+draw_header_border
+draw_header_blank
+
+# Las líneas interiores mantienen un ancho visual de 50 columnas.
+draw_header_text "🛡️  DNS REPAIR PRO" 15 16
+draw_header_text "DIAGNOSTICO Y REPARACION" 13 13
+
+draw_header_blank
+draw_header_bottom
+
 printf '\n'
 printf '  %b %s\n' "${WHITE}📅${RESET}" "Fecha: $(date '+%d/%m/%Y %H:%M:%S')"
 printf '  %b %s\n' "${WHITE}🖥️${RESET}" "Equipo: $(hostname 2>/dev/null || echo desconocido)"
