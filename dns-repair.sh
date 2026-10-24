@@ -1,14 +1,15 @@
+
 #!/usr/bin/env bash
 set -Eeuo pipefail
+set -o pipefail
 
 # ============================================================
-# DNS REPAIR PRO | NETWORK MANAGER
-# Diagnostico inteligente y reparacion DNS
+#                 DNS REPAIR PRO | NETWORK MANAGER
+#                  DIAGNOSTICO Y REPARACION DNS
 # ============================================================
 #
 # FUNCIONES:
-#   - Encabezado moderno con caja elegante.
-#   - Dashboard colorido con emojis e indicadores.
+#   - Encabezado amplio y dashboard con colores.
 #   - Deteccion de interfaz, IPv4 y ruta predeterminada.
 #   - Diagnostico de systemd-resolved y resolv.conf.
 #   - Pruebas DNS y conectividad HTTPS.
@@ -26,8 +27,6 @@ set -Eeuo pipefail
 #   - No modifica deliberadamente Netplan ni otros gestores.
 #
 # ============================================================
-
-set -o pipefail
 
 # ------------------------- COLORES -------------------------
 
@@ -61,6 +60,7 @@ readonly ORACLE_DNS="169.254.169.254"
 readonly PUBLIC_DNS=("1.1.1.1" "8.8.8.8")
 readonly TEST_DOMAINS=("raw.githubusercontent.com" "google.com")
 readonly HTTPS_URL="https://github.com/"
+readonly SEPARATOR="  ────────────────────────────────────────────────────"
 
 IFACE=""
 IP_ADDR=""
@@ -68,6 +68,7 @@ DEFAULT_ROUTE=""
 DNS_SOURCE=""
 BACKUP=""
 RESOLV_TARGET=""
+GLOBAL_DNS=""
 
 CURRENT_DNS=()
 DNS_SERVERS=()
@@ -80,6 +81,7 @@ ORACLE_OK=0
 APPLY_OK=0
 REPAIR_SUCCESS=0
 REPAIR_ATTEMPTED=0
+DNS_CONFIG_OK=0
 INITIAL_STATUS="NO DIAGNOSTICADO"
 FINAL_STATUS="DESCONFIGURADO"
 
@@ -87,7 +89,7 @@ FINAL_STATUS="DESCONFIGURADO"
 
 section() {
     printf '\n%b\n' "${CYAN}${BOLD}  $1${RESET}"
-    printf '  %b\n' "${GRAY}┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄ ┄${RESET}"
+    printf '%b\n' "${GRAY}${SEPARATOR}${RESET}"
 }
 
 ok() {
@@ -123,18 +125,27 @@ ask_yes_no() {
 }
 
 show_value() {
-    printf '  %-24s %b\n' "$1" "${WHITE}${2:-No disponible}${RESET}"
+    local label="$1"
+    local value="${2:-No disponible}"
+
+    printf '  %b %-22s%b %b%s%b\n' \
+        "${BLUE}›${RESET}" \
+        "$label" \
+        "${RESET}" \
+        "${WHITE}" \
+        "$value" \
+        "${RESET}"
 }
 
 status_good() {
-    printf '\n  %b %b\n' \
-        "${BG_GREEN}${WHITE}${BOLD}  ✔ DNS OPERATIVO  ${RESET}" \
+    printf '\n  %b  %b\n' \
+        "${BG_GREEN}${WHITE}${BOLD} ✔ DNS OPERATIVO ${RESET}" \
         "${GREEN}${BOLD}Configuracion verificada${RESET}"
 }
 
 status_bad() {
-    printf '\n  %b %b\n' \
-        "${BG_RED}${WHITE}${BOLD}  ✖ DNS CON FALLOS  ${RESET}" \
+    printf '\n  %b  %b\n' \
+        "${BG_RED}${WHITE}${BOLD} ✖ DNS CON FALLOS ${RESET}" \
         "${RED}${BOLD}Requiere atencion${RESET}"
 }
 
@@ -158,21 +169,27 @@ done
 clear 2>/dev/null || true
 
 printf '\n'
-printf '%b\n' "${CYAN}${BOLD}       ╭────────────────────────────────╮${RESET}"
-printf '%b\n' "${CYAN}${BOLD}       │                                │${RESET}"
-printf '%b\n' "${CYAN}${BOLD}       │       DNS REPAIR PRO           │${RESET}"
-printf '%b\n' "${CYAN}${BOLD}       │      NETWORK MANAGER           │${RESET}"
-printf '%b\n' "${CYAN}${BOLD}       │                                │${RESET}"
-printf '%b\n' "${CYAN}${BOLD}       ╰────────────────────────────────╯${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  ╔══════════════════════════════════════════════════════════════════════╗${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  ║                                                                      ║${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  ║                                                                      ║${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  ║                                                                      ║${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  ║                         DNS REPAIR PRO                               ║${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  ║                      NETWORK MANAGER                                 ║${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  ║                                                                      ║${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  ║                   DIAGNOSTICO Y REPARACION DNS                       ║${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  ║                                                                      ║${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  ║                                                                      ║${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  ║                                                                      ║${RESET}"
+printf '%b\n' "${CYAN}${BOLD}  ╚══════════════════════════════════════════════════════════════════════╝${RESET}"
 printf '\n'
 
-printf '  %b  %s\n' "${MAGENTA}🛠️${RESET}" "Version: $VERSION"
-printf '  %b  %s\n' "${MAGENTA}📅${RESET}" "Fecha: $(date '+%d/%m/%Y %H:%M:%S')"
-printf '  %b  %s\n' "${MAGENTA}🖥️${RESET}" "Equipo: $(hostname 2>/dev/null || echo desconocido)"
-printf '  %b  %s\n' "${MAGENTA}⚙️${RESET}" "Servicio: systemd-resolved"
+printf '  %b %-12s %s\n' "${MAGENTA}🛠️${RESET}" "Version:" "$VERSION"
+printf '  %b %-12s %s\n' "${MAGENTA}📅${RESET}" "Fecha:" "$(date '+%d/%m/%Y %H:%M:%S')"
+printf '  %b %-12s %s\n' "${MAGENTA}🖥️${RESET}" "Equipo:" "$(hostname 2>/dev/null || echo desconocido)"
+printf '  %b %-12s %s\n' "${MAGENTA}⚙️${RESET}" "Servicio:" "systemd-resolved"
 printf '\n'
-printf '%b\n' "${GRAY}  Diagnostico inteligente de conectividad DNS.${RESET}"
-printf '%b\n' "${GRAY}  Los cambios requieren tu confirmacion.${RESET}"
+printf '  %b\n' "${GRAY}Diagnostico inteligente de conectividad DNS.${RESET}"
+printf '  %b\n' "${GRAY}Los cambios requieren tu confirmacion.${RESET}"
 
 # ------------------------- SERVICIO DNS --------------------
 
@@ -242,7 +259,8 @@ DEFAULT_ROUTE="$(ip -4 route show default |
     awk 'NR==1 {print; exit}')"
 
 if [[ -n "$DEFAULT_ROUTE" ]]; then
-    detail "Ruta: $DEFAULT_ROUTE"
+    detail "Ruta predeterminada:"
+    detail "$DEFAULT_ROUTE"
 else
     warn "No se encontro una ruta IPv4 predeterminada."
 fi
@@ -284,7 +302,6 @@ if [[ ${#CURRENT_DNS[@]} -eq 0 ]]; then
     fi
 else
     ok "Servidores DNS asociados a la interfaz:"
-
     for dns in "${CURRENT_DNS[@]}"; do
         detail "🌐 $dns"
     done
@@ -357,7 +374,7 @@ test_oracle_dns() {
             ORACLE_OK=1
         fi
     elif command -v python3 >/dev/null 2>&1; then
-        # Enviar una consulta DNS A directamente al servidor Oracle.
+        # Consulta DNS A directa al servidor interno de Oracle.
         if timeout 5 python3 -c '
 import random, socket, struct
 
@@ -397,13 +414,17 @@ try:
     for _ in range(questions):
         while offset < len(data):
             length = data[offset]
+
             if length == 0:
                 offset += 1
                 break
+
             if length & 0xC0 == 0xC0:
                 offset += 2
                 break
+
             offset += length + 1
+
         offset += 4
 
     found = False
@@ -471,7 +492,6 @@ test_https
 if [[ ${#CURRENT_DNS[@]} -gt 0 ]] &&
    [[ "$DNS_RESOLUTION_OK" -eq 1 ]] &&
    systemctl is-active --quiet systemd-resolved; then
-
     DNS_CONFIG_OK=1
     INITIAL_STATUS="CONFIGURADO CORRECTAMENTE"
     FINAL_STATUS="$INITIAL_STATUS"
@@ -527,7 +547,7 @@ if ! ask_yes_no "¿Deseas continuar con la reparacion?"; then
     exit 0
 fi
 
-# ------------------------- RESPALDO ------------------------
+# ------------------------- RESPALDO -------------------------
 
 section "💾 06 · COPIA DE SEGURIDAD"
 
@@ -678,7 +698,7 @@ show_value "📡 Servidores:" "${DNS_SERVERS[*]:-Ninguno}"
 show_value "💾 Respaldo:" "${BACKUP:-No creado}"
 
 printf '\n'
-printf '  %-24s ' "Estado inicial:"
+printf '  %b %-22s%b ' "${BLUE}›${RESET}" "Estado inicial:" "${RESET}"
 
 if [[ "$INITIAL_STATUS" == "CONFIGURADO CORRECTAMENTE" ]]; then
     printf '%b\n' "${GREEN}${INITIAL_STATUS}${RESET}"
@@ -686,7 +706,7 @@ else
     printf '%b\n' "${RED}${INITIAL_STATUS}${RESET}"
 fi
 
-printf '  %-24s ' "Aplicacion:"
+printf '  %b %-22s%b ' "${BLUE}›${RESET}" "Aplicacion:" "${RESET}"
 
 if [[ "$APPLY_OK" -eq 1 ]]; then
     printf '%b\n' "${GREEN}Comandos aplicados${RESET}"
@@ -694,7 +714,7 @@ else
     printf '%b\n' "${RED}Aplicacion incompleta${RESET}"
 fi
 
-printf '  %-24s ' "Resolucion DNS:"
+printf '  %b %-22s%b ' "${BLUE}›${RESET}" "Resolucion DNS:" "${RESET}"
 
 if [[ "$DNS_RESOLUTION_OK" -eq 1 ]]; then
     printf '%b\n' "${GREEN}Correcta${RESET}"
@@ -702,7 +722,7 @@ else
     printf '%b\n' "${RED}Con fallos${RESET}"
 fi
 
-printf '  %-24s ' "Conectividad HTTPS:"
+printf '  %b %-22s%b ' "${BLUE}›${RESET}" "Conectividad HTTPS:" "${RESET}"
 
 if [[ "$HTTPS_OK" -eq 1 ]]; then
     printf '%b\n' "${GREEN}Correcta${RESET}"
@@ -710,7 +730,7 @@ else
     printf '%b\n' "${YELLOW}No verificada o con fallos${RESET}"
 fi
 
-printf '  %-24s ' "Reparacion verificada:"
+printf '  %b %-22s%b ' "${BLUE}›${RESET}" "Reparacion verificada:" "${RESET}"
 
 if [[ "$REPAIR_SUCCESS" -eq 1 ]]; then
     printf '%b\n' "${GREEN}${BOLD}SI${RESET}"
