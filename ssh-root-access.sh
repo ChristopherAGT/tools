@@ -1,24 +1,22 @@
 #!/usr/bin/env bash
-
-# ============================================================
-# SSH ROOT ACCESS | SECURE CONTROL
-# Configuracion de autenticacion root por contraseña
-# Compatible con Ubuntu / Debian
-# ============================================================
-
 set -Eeuo pipefail
 umask 077
 
-# ── PALETA DE COLORES ────────────────────────────────────────
-RESET='\033[0m'
-BOLD='\033[1m'
+# ============================================================
+#       SSH ROOT ACCESS | SECURE CONTROL
+#       Configuracion de acceso SSH por contraseña
+# ============================================================
+
+# ── COLORES ─────────────────────────────────────────────────
+RED='\033[1;31m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
 BLUE='\033[1;34m'
 CYAN='\033[1;36m'
 WHITE='\033[1;37m'
-GREEN='\033[1;32m'
-YELLOW='\033[1;33m'
-RED='\033[1;31m'
 GRAY='\033[0;90m'
+BOLD='\033[1m'
+RESET='\033[0m'
 
 # ── CONFIGURACION ───────────────────────────────────────────
 SSH_DIR="/etc/ssh"
@@ -26,155 +24,140 @@ SSH_CONFIG="$SSH_DIR/sshd_config"
 DROPIN_DIR="$SSH_DIR/sshd_config.d"
 DROPIN="$DROPIN_DIR/00-root-password-auth.conf"
 BACKUP_DIR="/root/.ssh-root-auth-backups"
-SERVICE="ssh"
 
-SPINNER_PID=""
-TEMP_LOG=""
-BACKUP_FILE=""
-HAD_PREVIOUS_DROPIN=0
-CONFIG_APPLIED=0
-
-# ── ELEVACION AUTOMATICA A ROOT ─────────────────────────────
-if [[ "$EUID" -ne 0 ]]; then
-    SCRIPT_PATH="$(readlink -f -- "$0")"
-
-    if command -v sudo >/dev/null 2>&1; then
-        exec sudo -E bash "$SCRIPT_PATH" "$@"
-    elif command -v su >/dev/null 2>&1; then
-        printf '%b\n' "${CYAN}Elevando privilegios automáticamente...${RESET}"
-        printf -v QUOTED_SCRIPT '%q' "$SCRIPT_PATH"
-        exec su -c "bash $QUOTED_SCRIPT"
-    else
-        printf '%b\n' "${RED}[ERROR] No se encontró sudo ni su.${RESET}"
-        printf '%b\n' "${YELLOW}No es posible obtener privilegios de administrador.${RESET}"
-        exit 1
-    fi
-fi
+CONFIG_CHANGED=0
+BACKUP_PATH=""
+SERVICE=""
 
 # ── INTERFAZ ────────────────────────────────────────────────
 line() {
-    printf '%b\n' "${GRAY}────────────────────────────────────────────${RESET}"
+    printf '%b\n' "${CYAN}────────────────────────────────────────────────${RESET}"
 }
 
 header() {
-    clear
+    clear 2>/dev/null || true
     printf '\n%b\n' "${BLUE}${BOLD}   SSH ROOT ACCESS${RESET}"
     printf '%b\n' "${CYAN}   Configuracion segura de acceso SSH${RESET}"
     line
     printf '%b\n\n' "${GRAY}   Ubuntu / Debian · Administracion del servidor${RESET}"
 }
 
-success() { printf '  %b[OK]%b %s\n' "$GREEN" "$RESET" "$*"; }
-info()    { printf '  %b[INFO]%b %s\n' "$CYAN" "$RESET" "$*"; }
-warn()    { printf '  %b[AVISO]%b %s\n' "$YELLOW" "$RESET" "$*"; }
-error()   { printf '  %b[ERROR]%b %s\n' "$RED" "$RESET" "$*"; }
-
-pause_exit() {
-    printf '\n%bPresiona ENTER para salir...%b' "$GRAY" "$RESET"
-    read -r _ || true
+success() {
+    printf '%b\n' "${GREEN}[OK]${RESET} $*"
 }
 
-# ── SPINNER ─────────────────────────────────────────────────
-spinner() {
-    local message="$1"
-    shift
-
-    local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-    local i=0
-    local rc=0
-
-    TEMP_LOG="$(mktemp /tmp/ssh-root-auth.XXXXXX)"
-
-    "$@" >"$TEMP_LOG" 2>&1 &
-    SPINNER_PID=$!
-
-    while kill -0 "$SPINNER_PID" 2>/dev/null; do
-        printf '\r  %b%s%b %s...' \
-            "$CYAN" "${frames[i]}" "$RESET" "$message"
-        i=$(( (i + 1) % ${#frames[@]} ))
-        sleep 0.10
-    done
-
-    wait "$SPINNER_PID" || rc=$?
-    SPINNER_PID=""
-
-    if (( rc == 0 )); then
-        printf '\r  %b✓%b %-43s\n' "$GREEN" "$RESET" "$message"
-        rm -f "$TEMP_LOG"
-        TEMP_LOG=""
-        return 0
-    fi
-
-    printf '\r  %b✗%b %-43s\n' "$RED" "$RESET" "$message"
-
-    if [[ -s "$TEMP_LOG" ]]; then
-        sed 's/^/    /' "$TEMP_LOG"
-    fi
-
-    rm -f "$TEMP_LOG"
-    TEMP_LOG=""
-    return "$rc"
+info() {
+    printf '%b\n' "${CYAN}[INFO]${RESET} $*"
 }
 
-# ── LIMPIEZA ────────────────────────────────────────────────
-cleanup() {
-    if [[ -n "$SPINNER_PID" ]]; then
-        kill "$SPINNER_PID" 2>/dev/null || true
-    fi
-
-    if [[ -n "$TEMP_LOG" ]]; then
-        rm -f "$TEMP_LOG"
-    fi
+warn() {
+    printf '%b\n' "${YELLOW}[AVISO]${RESET} $*"
 }
-trap cleanup EXIT
 
-# ── RESTAURACION DE CONFIGURACION ───────────────────────────
+error() {
+    printf '%b\n' "${RED}[ERROR]${RESET} $*" >&2
+}
+
+# ── ELEVACION AUTOMATICA A ROOT ─────────────────────────────
+if [[ "${EUID}" -ne 0 ]]; then
+    SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+
+    if command -v sudo >/dev/null 2>&1; then
+        exec sudo -E bash "$SCRIPT_PATH" "$@"
+    elif command -v su >/dev/null 2>&1; then
+        exec su -c 'exec bash "$1" "${@:2}"' _ "$SCRIPT_PATH" "$@"
+    else
+        printf '%b\n' "${RED}[ERROR]${RESET} No hay un metodo disponible para obtener permisos root." >&2
+        exit 1
+    fi
+fi
+
+# ── DETECCION DEL SERVICIO ──────────────────────────────────
+detect_service() {
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl list-unit-files ssh.service --no-legend 2>/dev/null |
+            grep -q 'ssh.service'; then
+            SERVICE="ssh"
+            return 0
+        elif systemctl list-unit-files sshd.service --no-legend 2>/dev/null |
+            grep -q 'sshd.service'; then
+            SERVICE="sshd"
+            return 0
+        fi
+    fi
+
+    if command -v service >/dev/null 2>&1; then
+        if service ssh status >/dev/null 2>&1; then
+            SERVICE="ssh"
+            return 0
+        elif service sshd status >/dev/null 2>&1; then
+            SERVICE="sshd"
+            return 0
+        fi
+    fi
+
+    error "No se pudo detectar el servicio SSH."
+    return 1
+}
+
+# ── RESPALDO Y RESTAURACION ─────────────────────────────────
 rollback_config() {
-    warn "Restaurando la configuracion SSH anterior..."
+    local original_status="${1:-1}"
 
-    if (( HAD_PREVIOUS_DROPIN == 1 )); then
-        if [[ -f "$BACKUP_FILE" ]]; then
-            cp -a "$BACKUP_FILE" "$DROPIN" || {
-                error "No se pudo restaurar el archivo anterior."
-                return 1
-            }
+    trap - ERR
+    set +e
+
+    if [[ "$CONFIG_CHANGED" -eq 1 && -n "$BACKUP_PATH" ]]; then
+        warn "Se produjo un error. Restaurando la configuracion anterior..."
+
+        if [[ -f "$BACKUP_PATH/dropin-existed" ]]; then
+            if [[ -f "$BACKUP_PATH/previous-dropin.conf" ]]; then
+                cp -p -- "$BACKUP_PATH/previous-dropin.conf" "$DROPIN"
+            else
+                error "No se encontro el respaldo del archivo anterior."
+            fi
         else
-            error "No se encontro la copia de seguridad."
-            return 1
+            rm -f -- "$DROPIN"
         fi
-    else
-        rm -f "$DROPIN" || {
-            error "No se pudo retirar la configuracion nueva."
-            return 1
-        }
+
+        if command -v sshd >/dev/null 2>&1 && sshd -t; then
+            if command -v systemctl >/dev/null 2>&1; then
+                systemctl reload "$SERVICE" >/dev/null 2>&1 ||
+                    systemctl restart "$SERVICE" >/dev/null 2>&1
+            elif command -v service >/dev/null 2>&1; then
+                service "$SERVICE" reload >/dev/null 2>&1 ||
+                    service "$SERVICE" restart >/dev/null 2>&1
+            fi
+            success "Se restauro la configuracion SSH anterior."
+        else
+            error "La configuracion restaurada no supera sshd -t."
+            error "Revisa manualmente: $DROPIN"
+        fi
     fi
 
-    if sshd -t; then
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl reload "$SERVICE" 2>/dev/null ||
-                service "$SERVICE" reload 2>/dev/null || true
-        else
-            service "$SERVICE" reload 2>/dev/null || true
-        fi
-        success "Configuracion anterior restaurada."
-    else
-        error "La configuracion restaurada necesita revision manual."
-        return 1
-    fi
+    exit "$original_status"
 }
+
+on_error() {
+    local status="$1"
+    error "La operacion fallo (codigo $status)."
+    rollback_config "$status"
+}
+
+trap 'on_error $?' ERR
 
 # ── VALIDACIONES INICIALES ──────────────────────────────────
 header
 
+info "Verificando requisitos del sistema..."
+
 if [[ ! -f "$SSH_CONFIG" ]]; then
-    error "No se encontro $SSH_CONFIG."
-    error "Comprueba que el servidor OpenSSH este instalado."
+    error "No se encontro el archivo $SSH_CONFIG"
     exit 1
 fi
 
 if ! command -v sshd >/dev/null 2>&1; then
-    error "No se encontro el comando sshd."
-    error "Instala OpenSSH Server antes de continuar."
+    error "No se encontro el ejecutable sshd."
     exit 1
 fi
 
@@ -183,206 +166,186 @@ if ! command -v chpasswd >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! command -v install >/dev/null 2>&1; then
+    error "No se encontro el comando install."
+    exit 1
+fi
+
+detect_service
+
 if ! command -v systemctl >/dev/null 2>&1 &&
    ! command -v service >/dev/null 2>&1; then
-    error "No se encontro un administrador del servicio SSH."
+    error "No se encontro systemctl ni service."
     exit 1
 fi
 
 if ! sshd -t; then
     error "La configuracion SSH actual contiene errores."
-    error "No se realizo ningun cambio."
+    error "No se modificara hasta corregirlos."
     exit 1
 fi
 
-mkdir -p "$DROPIN_DIR" "$BACKUP_DIR"
-chmod 700 "$BACKUP_DIR"
+success "Requisitos verificados."
+info "Servicio detectado: $SERVICE"
 
-# ── INFORMACION ─────────────────────────────────────────────
-printf '%b\n' "${WHITE}${BOLD}  RESUMEN DE LA OPERACION${RESET}"
-printf '  • Habilitar acceso SSH de root por contraseña\n'
-printf '  • Validar la configuracion antes de aplicarla\n'
-printf '  • Mantener intactas las reglas del firewall\n'
-printf '  • No modificar DNS ni actualizar paquetes\n'
-printf '  • Crear una copia de seguridad recuperable\n\n'
-
-warn "El acceso de root por contraseña aumenta el riesgo de ataques."
-warn "Asegurate de disponer de una contraseña robusta."
-printf '\n'
-
-read -r -p "  ¿Deseas continuar? [s/N]: " answer
-case "$answer" in
-    s|S|si|SI|Si|sí|Sí|sI) ;;
-    *)
-        info "Operacion cancelada. No se realizaron cambios."
-        exit 0
-        ;;
-esac
+# ── PREPARAR DIRECTORIOS ────────────────────────────────────
+install -d -m 0755 "$DROPIN_DIR"
+install -d -m 0700 "$BACKUP_DIR"
 
 # ── RESPALDO ────────────────────────────────────────────────
-header
 info "Preparando respaldo de la configuracion..."
 
-STAMP="$(date +%Y%m%d-%H%M%S)"
-BACKUP_FILE="$BACKUP_DIR/00-root-password-auth.conf.$STAMP.bak"
+TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
+BACKUP_PATH="$BACKUP_DIR/$TIMESTAMP"
 
-if [[ -e "$DROPIN" ]]; then
-    cp -a "$DROPIN" "$BACKUP_FILE"
-    HAD_PREVIOUS_DROPIN=1
-    success "Configuracion anterior respaldada."
+install -d -m 0700 "$BACKUP_PATH"
+
+if [[ -f "$DROPIN" ]]; then
+    cp -p -- "$DROPIN" "$BACKUP_PATH/previous-dropin.conf"
+    touch "$BACKUP_PATH/dropin-existed"
+    success "Archivo de configuracion anterior respaldado."
 else
-    HAD_PREVIOUS_DROPIN=0
-    info "No existia el archivo de configuracion adicional."
+    success "No existia un archivo anterior; se registrara su ausencia."
 fi
 
-# ── CONFIGURACION SSH ───────────────────────────────────────
-printf '\n'
-info "Configurando autenticacion SSH..."
+printf '%s\n' "$DROPIN" > "$BACKUP_PATH/managed-file.txt"
+printf '%s\n' "$SERVICE" > "$BACKUP_PATH/service.txt"
 
-if ! cat > "$DROPIN" <<'EOF'
+# ── CONFIGURAR AUTENTICACION ────────────────────────────────
+info "Configurando autenticacion SSH de root..."
+
+CONFIG_CHANGED=1
+
+cat > "$DROPIN" <<'EOF'
 # Administracion de acceso root por contraseña
 # Archivo administrado por SSH ROOT ACCESS
 PermitRootLogin yes
 PasswordAuthentication yes
 EOF
-then
-    error "No se pudo escribir la configuracion SSH."
-    rollback_config
-    exit 1
+
+chmod 0600 "$DROPIN"
+chown root:root "$DROPIN"
+
+# ── VALIDAR CONFIGURACION ───────────────────────────────────
+info "Validando la configuracion antes de aplicarla..."
+
+if ! sshd -t; then
+    error "La nueva configuracion no supera la validacion."
+    false
 fi
 
-chmod 600 "$DROPIN"
-CONFIG_APPLIED=1
+EFFECTIVE_CONFIG="$(sshd -T)"
 
-if ! spinner "Validando configuracion SSH" sshd -t; then
-    error "La configuracion no es valida."
-    rollback_config
-    exit 1
+if ! grep -qx 'permitrootlogin yes' <<< "$EFFECTIVE_CONFIG"; then
+    error "SSH no esta aplicando PermitRootLogin yes."
+    error "Puede existir otra directiva o una regla Match que lo sobrescriba."
+    false
 fi
 
-# Comprueba los valores efectivos, no solo el contenido del archivo.
-EFFECTIVE_CONFIG="$(sshd -T 2>/dev/null)" || {
-    error "No se pudo consultar la configuracion efectiva de SSH."
-    rollback_config
-    exit 1
-}
-
-ROOT_LOGIN="$(awk '$1=="permitrootlogin" {print $2; exit}' <<< "$EFFECTIVE_CONFIG")"
-PASSWORD_AUTH="$(awk '$1=="passwordauthentication" {print $2; exit}' <<< "$EFFECTIVE_CONFIG")"
-
-if [[ "$ROOT_LOGIN" != "yes" || "$PASSWORD_AUTH" != "yes" ]]; then
-    error "Otra directiva SSH esta impidiendo aplicar los valores requeridos."
-    info "PermitRootLogin efectivo: ${ROOT_LOGIN:-desconocido}"
-    info "PasswordAuthentication efectivo: ${PASSWORD_AUTH:-desconocido}"
-    rollback_config
-    exit 1
+if ! grep -qx 'passwordauthentication yes' <<< "$EFFECTIVE_CONFIG"; then
+    error "SSH no esta aplicando PasswordAuthentication yes."
+    error "Puede existir otra directiva que lo sobrescriba."
+    false
 fi
 
-success "Autenticacion root por contraseña configurada."
+success "Configuracion validada correctamente."
 
-# ── RECARGA DEL SERVICIO ────────────────────────────────────
-printf '\n'
-info "Aplicando la configuracion..."
+# ── APLICAR CAMBIOS ─────────────────────────────────────────
+info "Aplicando los cambios al servicio SSH..."
 
-if command -v systemctl >/dev/null 2>&1 &&
-   systemctl is-active --quiet "$SERVICE"; then
-    if ! spinner "Recargando servicio SSH" systemctl reload "$SERVICE"; then
-        warn "La recarga fallo; intentando reiniciar SSH..."
-        if ! spinner "Reiniciando servicio SSH" systemctl restart "$SERVICE"; then
-            error "No se pudo aplicar la configuracion al servicio."
-            rollback_config
-            exit 1
-        fi
+if command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active --quiet "$SERVICE"; then
+        systemctl reload "$SERVICE" ||
+            systemctl restart "$SERVICE"
+    else
+        systemctl start "$SERVICE"
     fi
 else
-    if ! spinner "Reiniciando servicio SSH" service "$SERVICE" restart; then
-        error "No se pudo reiniciar el servicio SSH."
-        rollback_config
-        exit 1
-    fi
+    service "$SERVICE" reload ||
+        service "$SERVICE" restart ||
+        service "$SERVICE" start
+fi
+
+if ! sshd -t; then
+    error "La validacion posterior a la recarga fallo."
+    false
 fi
 
 success "Servicio SSH actualizado."
 
-# ── CONTRASEÑA ROOT ─────────────────────────────────────────
+# ── ESTABLECER CONTRASEÑA DE ROOT ───────────────────────────
 printf '\n'
 line
-printf '%b\n' "${WHITE}${BOLD}  NUEVA CONTRASEÑA DE ROOT${RESET}"
+printf '%b\n' "${WHITE}${BOLD}   CONFIGURAR CONTRASEÑA DE ROOT${RESET}"
 line
 printf '\n'
-warn "La contraseña no se mostrara mientras escribes."
+warn "Introduce una contraseña robusta y exclusiva para este servidor."
+warn "La contraseña no se mostrara en pantalla."
 printf '\n'
 
 while true; do
-    senha=""
-    confirmacao=""
+    ROOT_PASSWORD=""
+    ROOT_PASSWORD_CONFIRM=""
 
-    read -r -s -p "  Nueva contraseña: " senha
+    IFS= read -r -s -p "Nueva contraseña de root: " ROOT_PASSWORD </dev/tty
+    printf '\n'
+    IFS= read -r -s -p "Confirma la contraseña: " ROOT_PASSWORD_CONFIRM </dev/tty
     printf '\n'
 
-    if [[ -z "$senha" ]]; then
-        error "La contraseña no puede estar vacia."
+    if [[ -z "$ROOT_PASSWORD" ]]; then
+        warn "La contraseña no puede estar vacia."
         continue
     fi
 
-    if [[ "$senha" == *:* || "$senha" == *$'\n'* ]]; then
-        error "La contraseña contiene caracteres no admitidos."
-        unset senha
+    if [[ "$ROOT_PASSWORD" != "$ROOT_PASSWORD_CONFIRM" ]]; then
+        warn "Las contraseñas no coinciden. Intentalo nuevamente."
+        unset ROOT_PASSWORD ROOT_PASSWORD_CONFIRM
         continue
     fi
 
-    read -r -s -p "  Confirmar contraseña: " confirmacao
-    printf '\n'
-
-    if [[ "$senha" != "$confirmacao" ]]; then
-        error "Las contraseñas no coinciden. Intenta nuevamente."
-        unset senha confirmacao
-        continue
-    fi
-
-    unset confirmacao
     break
 done
 
-set_root_password() {
-    printf 'root:%s\n' "$senha" | chpasswd
-}
+info "Actualizando la contraseña de root..."
 
-if ! spinner "Estableciendo contraseña de root" set_root_password; then
-    unset senha
-    error "No se pudo establecer la contraseña."
-    warn "La configuracion SSH ya fue aplicada, pero la contraseña no se cambio."
-    warn "Revisa el estado de la cuenta root antes de cerrar tu sesion."
-    exit 1
+if ! printf 'root:%s\n' "$ROOT_PASSWORD" | chpasswd; then
+    unset ROOT_PASSWORD ROOT_PASSWORD_CONFIRM
+    error "No se pudo actualizar la contraseña de root."
+    false
 fi
 
-unset senha
-success "Contraseña de root establecida."
+unset ROOT_PASSWORD ROOT_PASSWORD_CONFIRM
+
+success "Contraseña de root actualizada."
 
 # ── VERIFICACION FINAL ──────────────────────────────────────
-printf '\n'
+info "Realizando comprobaciones finales..."
 
 if ! sshd -t; then
-    error "La verificacion final de SSH fallo."
-    rollback_config
-    exit 1
+    error "La configuracion SSH no supera la verificacion final."
+    false
 fi
 
-if command -v systemctl >/dev/null 2>&1 &&
-   systemctl is-active --quiet "$SERVICE"; then
-    success "Servicio SSH activo."
-else
-    warn "No se pudo confirmar que SSH este activo."
+if command -v systemctl >/dev/null 2>&1; then
+    if ! systemctl is-active --quiet "$SERVICE"; then
+        error "El servicio $SERVICE no esta activo."
+        false
+    fi
 fi
 
-line
-printf '%b\n' "${GREEN}${BOLD}  OPERACION COMPLETADA${RESET}"
+CONFIG_CHANGED=0
+trap - ERR
+
 printf '\n'
-printf '  %bUsuario:%b       root\n' "$CYAN" "$RESET"
-printf '  %bAutenticacion:%b contraseña SSH\n' "$CYAN" "$RESET"
-printf '  %bRespaldo:%b      %s\n' "$CYAN" "$RESET" "$BACKUP_DIR"
-printf '\n'
-warn "Mantén abierta esta sesión hasta verificar otro acceso SSH."
-warn "Confirma desde otra terminal que puedes conectarte correctamente."
 line
+printf '%b\n' "${GREEN}${BOLD}   OPERACION COMPLETADA${RESET}"
+line
+success "Autenticacion SSH de root por contraseña habilitada."
+success "Configuracion validada correctamente."
+success "Servicio SSH: $SERVICE"
+info "Archivo administrado: $DROPIN"
+info "Respaldo guardado en: $BACKUP_PATH"
+printf '\n'
+warn "El acceso root por contraseña aumenta el riesgo de ataques."
+warn "Comprueba el acceso desde otra sesion SSH antes de cerrar la actual."
 printf '\n'
