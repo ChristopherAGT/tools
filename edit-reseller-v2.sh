@@ -1,8 +1,9 @@
+
 #!/bin/bash
 # ============================================================
 # ADMRufu 2.0 | Gestor de nombre de Reseller
 # Autor: ChristopherAGT
-# Archivo: /etc/reseller
+# Compatible: ADMRufu 2.0 y La Casita MX
 # ============================================================
 
 # ── Colores ─────────────────────────────────────────────────
@@ -158,16 +159,36 @@ pausa() {
 
 # ── Detectar instalación y archivo de reseller ───────────────
 detectar_instalacion() {
-    if [[ -d "/etc/VPS-MX" ]]; then
-        ARCHIVO="/etc/VPS-MX/message.txt"
-        INSTALACION="LA CASITA MX"
-    elif [[ -d "/etc/ADMRufu" || -f "/etc/reseller" ]]; then
+    ARCHIVO=""
+    INSTALACION=""
+
+    # Prioridad 1: ADMRufu 2.0.
+    # Se reconoce por su directorio de instalación o su archivo
+    # de reseller conocido.
+    if [[ -d "/etc/ADMRufu2.0" || -d "/etc/ADMRufu" || -f "/etc/reseller" ]]; then
         ARCHIVO="/etc/reseller"
         INSTALACION="ADMRUFU 2.0"
+
+    # Prioridad 2: La Casita MX.
+    elif [[ -f "/etc/VPS-MX/message.txt" || -d "/etc/VPS-MX" ]]; then
+        ARCHIVO="/etc/VPS-MX/message.txt"
+        INSTALACION="LA CASITA MX"
+
     else
-        ARCHIVO=""
-        INSTALACION=""
         return 1
+    fi
+
+    # Comprobar que el archivo existente sea escribible.
+    if [[ -e "$ARCHIVO" ]]; then
+        if [[ ! -f "$ARCHIVO" || ! -w "$ARCHIVO" ]]; then
+            return 2
+        fi
+    else
+        # Si no existe, comprobar que el directorio de destino
+        # permita crearlo.
+        if [[ ! -d "$(dirname "$ARCHIVO")" || ! -w "$(dirname "$ARCHIVO")" ]]; then
+            return 2
+        fi
     fi
 
     return 0
@@ -185,9 +206,20 @@ if ((EUID != 0)); then
 fi
 
 # ── Identificar instalación ──────────────────────────────────
-if ! detectar_instalacion; then
+detectar_instalacion
+estado_deteccion=$?
+
+if ((estado_deteccion == 1)); then
     printf '%b\n' "${rojo}${negrita}ERROR:${reset} No se detectó una instalación compatible."
-    printf '%b\n' "${gris}Instalaciones compatibles: ADMRufu 2.0 y La Casita MX.${reset}"
+    printf '%b\n' "${gris}Rutas reconocidas:${reset}"
+    printf '%b\n' "${gris}ADMRufu 2.0: /etc/ADMRufu2.0 o /etc/reseller${reset}"
+    printf '%b\n' "${gris}La Casita MX: /etc/VPS-MX/message.txt${reset}"
+    pausa
+    exit 1
+elif ((estado_deteccion == 2)); then
+    printf '%b\n' "${rojo}${negrita}ERROR:${reset} No se puede escribir en el archivo de destino."
+    printf '%b\n' "${gris}Instalación: $INSTALACION${reset}"
+    printf '%b\n' "${gris}Archivo: $ARCHIVO${reset}"
     pausa
     exit 1
 fi
@@ -254,7 +286,6 @@ borde_superior
 centrar "VISTA PREVIA"
 separador
 fila ""
-fila "Sistema: $INSTALACION"
 fila "Nombre del Reseller: $final"
 fila ""
 borde_inferior
