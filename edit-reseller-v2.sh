@@ -255,7 +255,6 @@ borde_superior
 centrar "VISTA PREVIA"
 separador
 fila ""
-fila "Sistema: $INSTALACION"
 fila "Nombre del Reseller: $final"
 fila ""
 borde_inferior
