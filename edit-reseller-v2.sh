@@ -17,7 +17,8 @@ negrita=$'\033[1m'
 reset=$'\033[0m'
 
 # ── Configuración ────────────────────────────────────────────
-ARCHIVO="/etc/reseller"
+ARCHIVO=""
+INSTALACION=""
 ANCHO=48
 INTERIOR=$((ANCHO - 2))
 ANCHO_PANEL=48
@@ -91,7 +92,7 @@ centrar() {
     visible=$(ancho_visual "$texto")
 
     if ((visible > INTERIOR)); then
-        texto="${texto:0:$INTERIOR}"
+        texto="${texto:0:INTERIOR}"
         visible=$(ancho_visual "$texto")
     fi
 
@@ -155,17 +156,25 @@ pausa() {
     read -r -p "Presiona ENTER para salir..." _
 }
 
+# ── Detectar instalación y archivo de reseller ───────────────
+detectar_instalacion() {
+    if [[ -d "/etc/VPS-MX" ]]; then
+        ARCHIVO="/etc/VPS-MX/message.txt"
+        INSTALACION="LA CASITA MX"
+    elif [[ -d "/etc/ADMRufu" || -f "/etc/reseller" ]]; then
+        ARCHIVO="/etc/reseller"
+        INSTALACION="ADMRUFU 2.0"
+    else
+        ARCHIVO=""
+        INSTALACION=""
+        return 1
+    fi
+
+    return 0
+}
+
 # ── Inicio ───────────────────────────────────────────────────
 clear 2>/dev/null || true
-printf '\n'
-
-borde_superior
-centrar "ADMRUFU 2.0"
-separador
-centrar "GESTOR DE RESELLER"
-centrar "Personalizacion del nombre"
-borde_inferior
-
 printf '\n'
 
 # ── Verificar permisos ───────────────────────────────────────
@@ -175,10 +184,29 @@ if ((EUID != 0)); then
     exit 1
 fi
 
+# ── Identificar instalación ──────────────────────────────────
+if ! detectar_instalacion; then
+    printf '%b\n' "${rojo}${negrita}ERROR:${reset} No se detectó una instalación compatible."
+    printf '%b\n' "${gris}Instalaciones compatibles: ADMRufu 2.0 y La Casita MX.${reset}"
+    pausa
+    exit 1
+fi
+
+# ── Encabezado dinámico ──────────────────────────────────────
+borde_superior
+centrar "$INSTALACION"
+separador
+centrar "GESTOR DE RESELLER"
+centrar "Personalizacion del nombre"
+borde_inferior
+
+printf '\n'
+
 # ── Leer reseller actual ─────────────────────────────────────
 if [[ -f "$ARCHIVO" ]]; then
     if ! actual=$(cat -- "$ARCHIVO"); then
         printf '%b\n' "${rojo}No se pudo leer $ARCHIVO${reset}"
+        pausa
         exit 1
     fi
 
@@ -190,6 +218,7 @@ fi
 # ── Panel de información actual ──────────────────────────────
 abrir_panel "INFORMACION ACTUAL"
 panel_fila ""
+panel_fila "Sistema: $INSTALACION"
 panel_fila "👤 Reseller: $actual"
 panel_fila ""
 cerrar_panel
@@ -198,7 +227,7 @@ printf '\n'
 
 # ── Solicitar nuevo nombre ───────────────────────────────────
 printf '%b\n' "${azul}${negrita}✎ CONFIGURAR NUEVO NOMBRE${reset}"
-printf '%b\n' "${gris}Escribe el nombre que deseas mostrar en ADMRufu.${reset}"
+printf '%b\n' "${gris}Escribe el nombre que deseas mostrar en $INSTALACION.${reset}"
 printf '\n'
 
 printf '%b' "${amarillo}➜ Nombre del Reseller: ${reset}"
@@ -226,6 +255,7 @@ borde_superior
 centrar "VISTA PREVIA"
 separador
 fila ""
+fila "Sistema: $INSTALACION"
 fila "Nombre del Reseller: $final"
 fila ""
 borde_inferior
@@ -272,6 +302,7 @@ centrar "CAMBIO COMPLETADO"
 separador
 fila ""
 fila "Reseller actualizado correctamente."
+fila "Sistema: $INSTALACION"
 fila ""
 borde_inferior
 
@@ -282,6 +313,6 @@ printf '  %b\n' "${amarillo}${negrita}${final}${reset}"
 printf '\n'
 printf '  %b\n' "${verde}✔ Guardado en:${reset} ${blanco}${ARCHIVO}${reset}"
 printf '\n'
-printf '%b\n' "${gris}ADMRufu 2.0 | Gestor de Reseller${reset}"
+printf '%b\n' "${gris}${INSTALACION} | Gestor de Reseller${reset}"
 
 pausa
