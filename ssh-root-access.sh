@@ -34,6 +34,23 @@ BACKUP_FILE=""
 HAD_PREVIOUS_DROPIN=0
 CONFIG_APPLIED=0
 
+# ── ELEVACION AUTOMATICA A ROOT ─────────────────────────────
+if [[ "$EUID" -ne 0 ]]; then
+    SCRIPT_PATH="$(readlink -f -- "$0")"
+
+    if command -v sudo >/dev/null 2>&1; then
+        exec sudo -E bash "$SCRIPT_PATH" "$@"
+    elif command -v su >/dev/null 2>&1; then
+        printf '%b\n' "${CYAN}Elevando privilegios automáticamente...${RESET}"
+        printf -v QUOTED_SCRIPT '%q' "$SCRIPT_PATH"
+        exec su -c "bash $QUOTED_SCRIPT"
+    else
+        printf '%b\n' "${RED}[ERROR] No se encontró sudo ni su.${RESET}"
+        printf '%b\n' "${YELLOW}No es posible obtener privilegios de administrador.${RESET}"
+        exit 1
+    fi
+fi
+
 # ── INTERFAZ ────────────────────────────────────────────────
 line() {
     printf '%b\n' "${GRAY}────────────────────────────────────────────${RESET}"
@@ -89,6 +106,7 @@ spinner() {
     fi
 
     printf '\r  %b✗%b %-43s\n' "$RED" "$RESET" "$message"
+
     if [[ -s "$TEMP_LOG" ]]; then
         sed 's/^/    /' "$TEMP_LOG"
     fi
@@ -120,6 +138,9 @@ rollback_config() {
                 error "No se pudo restaurar el archivo anterior."
                 return 1
             }
+        else
+            error "No se encontro la copia de seguridad."
+            return 1
         fi
     else
         rm -f "$DROPIN" || {
@@ -144,12 +165,6 @@ rollback_config() {
 
 # ── VALIDACIONES INICIALES ──────────────────────────────────
 header
-
-if [[ "$(id -u)" -ne 0 ]]; then
-    error "Debes ejecutar este script como root."
-    printf '\n  Ejecuta: %bsudo -i%b\n\n' "$CYAN" "$RESET"
-    exit 1
-fi
 
 if [[ ! -f "$SSH_CONFIG" ]]; then
     error "No se encontro $SSH_CONFIG."
@@ -346,6 +361,7 @@ success "Contraseña de root establecida."
 
 # ── VERIFICACION FINAL ──────────────────────────────────────
 printf '\n'
+
 if ! sshd -t; then
     error "La verificacion final de SSH fallo."
     rollback_config
