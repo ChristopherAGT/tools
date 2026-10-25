@@ -218,7 +218,6 @@ fi
 # ── Panel de información actual ──────────────────────────────
 abrir_panel "INFORMACION ACTUAL"
 panel_fila ""
-panel_fila "Sistema: $INSTALACION"
 panel_fila "👤 Reseller: $actual"
 panel_fila ""
 cerrar_panel
@@ -255,6 +254,7 @@ borde_superior
 centrar "VISTA PREVIA"
 separador
 fila ""
+fila "Sistema: $INSTALACION"
 fila "Nombre del Reseller: $final"
 fila ""
 borde_inferior
