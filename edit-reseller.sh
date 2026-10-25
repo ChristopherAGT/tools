@@ -1,4 +1,3 @@
-
 #!/bin/bash
 # ============================================================
 # ADMRufu 2.0 | Gestor de nombre de Reseller
@@ -332,7 +331,6 @@ centrar "CAMBIO COMPLETADO"
 separador
 fila ""
 fila "Reseller actualizado correctamente."
-fila "Sistema: $INSTALACION"
 fila ""
 borde_inferior
 
