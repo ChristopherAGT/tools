@@ -16,7 +16,7 @@ umask 077
 # CONFIGURACION GENERAL
 # --------------------------------------------------------------
 
-VERSION="v1.4"
+VERSION="v1.0"
 
 BOX_WIDTH=58
 CARD_WIDTH=24
