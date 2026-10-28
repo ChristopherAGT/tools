@@ -33,32 +33,35 @@ LOG_FILE="/var/log/tools-admin.log"
 
 declare -a MENU_SCRIPTS=(
     "darnix-backup-manager.sh"
-    "keys-manager.sh"
-    "ssh-root-access.sh"
     "edit-reseller.sh"
     "firewalld-setup.sh"
     "dns-repair.sh"
     "bandwidth-manager.sh"
+    "keys-manager.sh"
+    "ssh-root-access.sh"
+    "hostname-manager.sh"
     "cleanup.sh"
     "tcp-bbr.sh"
 )
 
 declare -a MENU_DESCRIPTIONS=(
     "Respaldar / Restaurar usuarios Darnix"
-    "Administrar claves SLOWDNS"
-    "Habilitar acceso SSH como root"
     "Modificar Reseller"
     "Configurar Firewall TCP/UDP"
     "Restaurar DNS a valores de fabrica"
     "Modificar limite de ancho de banda"
+    "Administrar claves SLOWDNS"
+    "Habilitar acceso SSH como root"
+    "Modificar Hostname"
     "Limpiar memoria del sistema"
     "Optimizar TCP y activar BBR"
 )
 
 declare -a MENU_CATEGORIES=(
-    "1" "1" "1" "1"
+    "1" "1"
     "2" "2" "2"
-    "3" "3"
+    "3" "3" "3"
+    "4" "4"
 )
 
 # --------------------------------------------------------------
@@ -88,12 +91,13 @@ if [[ -t 1 ]]; then
     NUM7=$'\033[1;36m'
     NUM8=$'\033[1;32m'
     NUM9=$'\033[1;33m'
+    NUM10=$'\033[1;35m'
 else
     R='' B='' D=''
     RED='' GREEN='' YELLOW='' BLUE=''
     MAGENTA='' CYAN='' WHITE='' GRAY=''
     NUM1='' NUM2='' NUM3='' NUM4='' NUM5=''
-    NUM6='' NUM7='' NUM8='' NUM9=''
+    NUM6='' NUM7='' NUM8='' NUM9='' NUM10=''
 fi
 
 # --------------------------------------------------------------
@@ -414,9 +418,9 @@ show_dashboard() {
     card_bottom "$MAGENTA"
     printf '\n'
 
-    # Identificación centrada en lugar de la información repetitiva.
+    # Identificación centrada en color blanco.
     box_separator "$BLUE"
-    box_row "$BLUE" "$(center_text "${CYAN}${B}CHRISTOPHER ACKERMAN${R}" "$((BOX_WIDTH - 2))")"
+    box_row "$BLUE" "$(center_text "${WHITE}${B}CHRISTOPHER ACKERMAN${R}" "$((BOX_WIDTH - 2))")"
     box_bottom "$BLUE"
 }
 
@@ -428,7 +432,8 @@ category_name() {
     case "$1" in
         1) printf 'USUARIOS Y ACCESOS' ;;
         2) printf 'RED Y CONECTIVIDAD' ;;
-        3) printf 'MANTENIMIENTO Y RENDIMIENTO' ;;
+        3) printf 'SISTEMA Y CONFIGURACIÓN' ;;
+        4) printf 'MANTENIMIENTO Y RENDIMIENTO' ;;
         *) printf 'OTRAS HERRAMIENTAS' ;;
     esac
 }
@@ -448,6 +453,7 @@ number_color() {
         7) printf '%s' "$NUM7" ;;
         8) printf '%s' "$NUM8" ;;
         9) printf '%s' "$NUM9" ;;
+        10) printf '%s' "$NUM10" ;;
         *) printf '%s' "$CYAN" ;;
     esac
 }
@@ -485,17 +491,20 @@ show_main_menu() {
     show_category "👥" "USUARIOS Y ACCESOS" "$CYAN"
     show_menu_item 1 "${MENU_DESCRIPTIONS[0]}"
     show_menu_item 2 "${MENU_DESCRIPTIONS[1]}"
-    show_menu_item 3 "${MENU_DESCRIPTIONS[2]}"
-    show_menu_item 4 "${MENU_DESCRIPTIONS[3]}"
 
     show_category "🌐" "RED Y CONECTIVIDAD" "$GREEN"
+    show_menu_item 3 "${MENU_DESCRIPTIONS[2]}"
+    show_menu_item 4 "${MENU_DESCRIPTIONS[3]}"
     show_menu_item 5 "${MENU_DESCRIPTIONS[4]}"
+
+    show_category "⚙️" "SISTEMA Y CONFIGURACIÓN" "$MAGENTA"
     show_menu_item 6 "${MENU_DESCRIPTIONS[5]}"
     show_menu_item 7 "${MENU_DESCRIPTIONS[6]}"
-
-    show_category "⚙️" "MANTENIMIENTO Y RENDIMIENTO" "$YELLOW"
     show_menu_item 8 "${MENU_DESCRIPTIONS[7]}"
+
+    show_category "🛠️" "MANTENIMIENTO Y RENDIMIENTO" "$YELLOW"
     show_menu_item 9 "${MENU_DESCRIPTIONS[8]}"
+    show_menu_item 10 "${MENU_DESCRIPTIONS[9]}"
 
     box_separator "$CYAN"
     box_row "$CYAN" "${RED}${B}[0]${R} Salir del administrador"
@@ -506,41 +515,20 @@ show_main_menu() {
 
 # --------------------------------------------------------------
 # EJECUCION REMOTA DESDE GITHUB
+# Ejecución directa sin pantalla de confirmación
 # --------------------------------------------------------------
 
 execute_script() {
     local index="$1"
     local script_name label script_url script_content
     local result=0
-    local answer
 
     script_name="${MENU_SCRIPTS[$index]}"
     label="${MENU_DESCRIPTIONS[$index]}"
     script_url="${RAW_BASE}/${script_name}"
     script_content=""
 
-    printf '\n'
-
-    box_top "$YELLOW"
-    box_row "$YELLOW" "$(center_text "${WHITE}${B}EJECUCIÓN DE HERRAMIENTA${R}" "$((BOX_WIDTH - 2))")"
-    box_separator "$YELLOW"
-    box_row "$YELLOW" "Herramienta: $label"
-    box_row "$YELLOW" "Origen: GitHub / rama main"
-    box_separator "$YELLOW"
-    box_row "$YELLOW" "${RED}Se ejecutará con permisos de administrador.${R}"
-    box_bottom "$YELLOW"
-
-    printf '\n%b  ¿Deseas continuar? [s/N]: %b' "$CYAN" "$R"
-
-    read -r answer || return 0
-
-    case "${answer,,}" in
-        s|si|sí|y|yes) ;;
-        *)
-            printf '\n%b  Ejecución cancelada.%b\n' "$YELLOW" "$R"
-            return 0
-            ;;
-    esac
+    printf '\n%b  ▶ Ejecutando: %s%b\n' "$CYAN" "$label" "$R"
 
     if ! script_content="$(
         curl -fsSL \
@@ -551,18 +539,24 @@ execute_script() {
     )"; then
         printf '\n%b  ✖ No se pudo descargar la herramienta.%b\n' "$RED" "$R"
         log_message "ERROR de descarga | $script_name"
+        printf '\n'
+        read -r -p "Presiona ENTER para volver al menú..." _ || true
         return 1
     fi
 
     if [[ -z "$script_content" ]]; then
         printf '\n%b  ✖ GitHub devolvió contenido vacío.%b\n' "$RED" "$R"
         log_message "ERROR contenido vacío | $script_name"
+        printf '\n'
+        read -r -p "Presiona ENTER para volver al menú..." _ || true
         return 1
     fi
 
     if ! bash -n <<< "$script_content"; then
         printf '\n%b  ✖ El script contiene errores de sintaxis.%b\n' "$RED" "$R"
         log_message "ERROR de sintaxis | $script_name"
+        printf '\n'
+        read -r -p "Presiona ENTER para volver al menú..." _ || true
         return 1
     fi
 
@@ -575,8 +569,7 @@ execute_script() {
     export SCRIPT_REMOTE_URL="$script_url"
     export SCRIPT_REPO_PATH="$script_name"
 
-    printf '\n%b  ✔ Descarga y sintaxis verificadas.%b\n' "$GREEN" "$R"
-    printf '%b  ▶ Ejecutando: %s%b\n' "$CYAN" "$label" "$R"
+    printf '%b  ✔ Descarga y sintaxis verificadas.%b\n' "$GREEN" "$R"
     printf '%b  ──────────────────────────────────────────────────%b\n' "$GRAY" "$R"
 
     log_message "Inicio de ejecución | $script_name | $label"
@@ -733,12 +726,14 @@ main() {
             *)
                 # Evita errores al procesar opciones con ceros iniciales.
                 if [[ "$option" =~ ^[0-9]+$ ]]; then
+                    # La opción 0 se procesa antes; las opciones 1–10
+                    # se convierten a índices de arreglo de 0–9.
                     index=$((10#$option - 1))
 
                     if ((index >= 0 && index < ${#MENU_SCRIPTS[@]})); then
                         execute_script "$index" || true
                     else
-                        printf '\n%b  ⚠ Selecciona una opción del 0 al 9.%b\n' "$YELLOW" "$R"
+                        printf '\n%b  ⚠ Selecciona una opción del 0 al 10.%b\n' "$YELLOW" "$R"
                         sleep 1
                     fi
                 else
