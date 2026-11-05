@@ -1,610 +1,945 @@
 
 #!/usr/bin/env bash
-
-# ============================================================
-#          VPS TRAFFIC & SYSTEM DIAGNOSTIC
-#                   EPRO DEV
-# ============================================================
-#
-# ANALISIS INTEGRAL:
-#   - Usuarios y sesiones
-#   - CPU y carga del sistema
-#   - RAM y SWAP
-#   - Trafico de red en tiempo real
-#   - Errores y paquetes descartados
-#   - Estadisticas TCP y retransmisiones
-#   - Conexiones y puertos
-#   - Procesos y servicios
-#   - Almacenamiento
-#   - Kernel y limites
-#   - Conntrack
-#   - Firewall y rutas
-#
-# COMPATIBILIDAD:
-#   Debian / Ubuntu / Linux
-#
-# REQUISITOS:
-#   Bash, awk, grep, ps, df
-#
-# SEGURIDAD:
-#   Solo lectura. No modifica el sistema.
-#
-# ============================================================
-
-set -u
+set -Eeuo pipefail
 umask 077
 
+# ============================================================
+#              EPRO DEV SYSTEM AUDIT
+#          ADVANCED LINUX PERFORMANCE DIAGNOSTIC
+# ============================================================
+#
+# AUDITORIA INTEGRAL:
+#   - Sistema operativo y kernel
+#   - CPU, RAM, SWAP y almacenamiento
+#   - Todos los parametros SYSCTL
+#   - Optimizacion TCP/IP
+#   - BBR, CUBIC, FQ y algoritmos disponibles
+#   - Netfilter, Conntrack y Firewall
+#   - Interfaces, MTU y offloading
+#   - Socket, backlog y retransmisiones
+#   - Limites del sistema y procesos
+#   - Systemd y servicios
+#   - Configuraciones persistentes
+#   - Seguridad y diagnostico de rendimiento
+#
+# IMPORTANTE:
+#   SCRIPT DE SOLO LECTURA.
+#   NO MODIFICA NINGUNA CONFIGURACION.
+#
+# ============================================================
+
+export LC_ALL=C
+export SYSTEMD_PAGER=cat
+export PAGER=cat
+
 VERSION="1.0.0"
-INTERVAL=2
+TITLE="EPRO DEV SYSTEM AUDIT"
 
-# ------------------------------------------------------------
-# COLORES
-# ------------------------------------------------------------
+CYAN='\033[1;36m'
+BLUE='\033[1;34m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+RED='\033[1;31m'
+WHITE='\033[1;37m'
+GRAY='\033[0;37m'
+RESET='\033[0m'
 
-if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
-    R='\033[0m'
-    B='\033[1m'
-    D='\033[2m'
-    RED='\033[1;31m'
-    GREEN='\033[1;32m'
-    YELLOW='\033[1;33m'
-    BLUE='\033[1;34m'
-    CYAN='\033[1;36m'
-    WHITE='\033[1;37m'
-else
-    R='' B='' D='' RED='' GREEN=''
-    YELLOW='' BLUE='' CYAN='' WHITE=''
+if [[ ! -t 1 ]]; then
+    CYAN='' BLUE='' GREEN='' YELLOW=''
+    RED='' WHITE='' GRAY='' RESET=''
 fi
 
-# ------------------------------------------------------------
-# FUNCIONES GENERALES
-# ------------------------------------------------------------
-
-have() {
-    command -v "$1" >/dev/null 2>&1
-}
-
 line() {
-    printf '%b\n' "${D}────────────────────────────────────────────────────────${R}"
+    printf '%b\n' "${GRAY}────────────────────────────────────────────────────────────${RESET}"
 }
 
-title() {
-    printf '\n%b\n' "${CYAN}${B}◆  $1${R}"
+header() {
+    clear 2>/dev/null || true
+    printf '\n'
+    printf '%b\n' "${CYAN}              EPRO DEV SYSTEM AUDIT${RESET}"
+    printf '%b\n' "${WHITE}          ADVANCED PERFORMANCE ANALYSIS${RESET}"
+    printf '%b\n' "${GRAY}                    VERSION ${VERSION}${RESET}"
+    line
+    printf '\n'
+}
+
+section() {
+    printf '\n'
+    printf '%b\n' "${BLUE}◆  $1${RESET}"
     line
 }
 
-info() {
-    printf '  %-27s %b\n' "$1" "$2"
-}
-
 ok() {
-    printf '  %b %s\n' "${GREEN}✓${R}" "$1"
+    printf '  %b %s\n' "${GREEN}✓${RESET}" "$1"
 }
 
 warn() {
-    printf '  %b %s\n' "${YELLOW}!${R}" "$1"
+    printf '  %b %s\n' "${YELLOW}!${RESET}" "$1"
 }
 
 bad() {
-    printf '  %b %s\n' "${RED}✗${R}" "$1"
+    printf '  %b %s\n' "${RED}✗${RESET}" "$1"
+}
+
+info() {
+    printf '  %b %s\n' "${CYAN}●${RESET}" "$1"
+}
+
+cmd() {
+    command -v "$1" >/dev/null 2>&1
 }
 
 value() {
-    printf '%b\n' "${WHITE}$1${R}"
+    local label="$1"
+    local result="$2"
+    printf '  %-34s %s\n' "$label" "${result:-N/D}"
 }
 
-run() {
-    if have "$1"; then
-        shift
-        "$@" 2>/dev/null || true
+read_file() {
+    local file="$1"
+    if [[ -r "$file" ]]; then
+        cat "$file" 2>/dev/null || true
     else
-        printf '  Comando no disponible: %s\n' "$1"
+        printf 'N/D\n'
     fi
 }
 
-bytes_human() {
-    awk -v n="${1:-0}" 'BEGIN {
-        split("B KB MB GB TB",u," ")
-        i=1
-        while(n>=1024 && i<5){n/=1024;i++}
-        printf "%.2f %s",n,u[i]
-    }'
+run_section() {
+    local description="$1"
+    shift
+    printf '\n  %s\n' "$description"
+    "$@" 2>/dev/null || true
 }
 
-# ------------------------------------------------------------
-# ENCABEZADO
-# ------------------------------------------------------------
+# ============================================================
+# 01. SYSTEM INFORMATION
+# ============================================================
 
-clear 2>/dev/null || true
+system_info() {
+    section "01. INFORMACION GENERAL DEL SISTEMA"
 
-printf '\n'
-printf '  %bVPS TRAFFIC & SYSTEM DIAGNOSTIC%b\n' "$WHITE$B" "$R"
-printf '  %bE P R O   D E V%b\n' "$CYAN" "$R"
-printf '  %bVERSION %s%b\n' "$D" "$VERSION" "$R"
-printf '\n'
-
-info "FECHA" "$(date '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null)"
-info "HOSTNAME" "$(hostname 2>/dev/null || echo N/D)"
-info "USUARIO" "$(id -un 2>/dev/null || echo N/D)"
-info "PERMISOS" "$([[ ${EUID:-$(id -u)} -eq 0 ]] && echo ROOT || echo USUARIO)"
-info "ARQUITECTURA" "$(uname -m 2>/dev/null)"
-info "KERNEL" "$(uname -r 2>/dev/null)"
-info "UPTIME" "$(uptime -p 2>/dev/null || uptime 2>/dev/null)"
-
-if [[ -r /etc/os-release ]]; then
-    . /etc/os-release
-    info "DISTRIBUCION" "${PRETTY_NAME:-Linux}"
-fi
-
-# ------------------------------------------------------------
-# 1. CPU
-# ------------------------------------------------------------
-
-title "01. ANALISIS DE PROCESADOR"
-
-CORES=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
-LOAD=$(awk '{print $1" / "$2" / "$3}' /proc/loadavg 2>/dev/null || echo N/D)
-
-info "NUCLEOS DISPONIBLES" "$CORES"
-info "CARGA 1 / 5 / 15 MIN" "$LOAD"
-
-if [[ -r /proc/stat ]]; then
-    read -r _ u1 n1 s1 i1 w1 irq1 sirq1 st1 _ < /proc/stat
-    idle1=$((i1 + w1))
-    total1=$((u1+n1+s1+i1+w1+irq1+sirq1+st1))
-
-    sleep "$INTERVAL"
-
-    read -r _ u2 n2 s2 i2 w2 irq2 sirq2 st2 _ < /proc/stat
-    idle2=$((i2+w2))
-    total2=$((u2+n2+s2+i2+w2+irq2+sirq2+st2))
-
-    dt=$((total2-total1))
-    di=$((idle2-idle1))
-
-    if (( dt > 0 )); then
-        CPU_USAGE=$(( (100*(dt-di))/dt ))
-        info "USO CPU PROMEDIO" "${CPU_USAGE}%"
-
-        (( CPU_USAGE >= 90 )) && warn "CPU con utilizacion elevada"
-        (( CPU_USAGE < 90 )) && ok "CPU dentro del umbral de observacion"
-    fi
-fi
-
-printf '\n  PROCESOS DE MAYOR CONSUMO CPU\n'
-run ps -eo pid,ppid,user,%cpu,%mem,stat,comm --sort=-%cpu |
-    head -n 9
-
-# ------------------------------------------------------------
-# 2. MEMORIA
-# ------------------------------------------------------------
-
-title "02. MEMORIA RAM Y SWAP"
-
-if [[ -r /proc/meminfo ]]; then
-    awk '
-    /^MemTotal:/ {t=$2}
-    /^MemAvailable:/ {a=$2}
-    /^MemFree:/ {f=$2}
-    /^Cached:/ {c=$2}
-    /^Buffers:/ {b=$2}
-    /^SwapTotal:/ {st=$2}
-    /^SwapFree:/ {sf=$2}
-    END {
-        if(t>0) {
-            printf "  RAM TOTAL:        %.2f GB\n",t/1048576
-            printf "  RAM DISPONIBLE:   %.2f GB\n",a/1048576
-            printf "  RAM LIBRE:        %.2f GB\n",f/1048576
-            printf "  CACHE:            %.2f GB\n",c/1048576
-            printf "  BUFFERS:          %.2f GB\n",b/1048576
-            printf "  RAM UTILIZADA:    %.1f%%\n",(t-a)*100/t
-            if(a/t<0.10) print "  ALERTA: RAM DISPONIBLE INFERIOR AL 10%"
-        }
-        if(st>0) {
-            printf "  SWAP TOTAL:       %.2f GB\n",st/1048576
-            printf "  SWAP UTILIZADA:   %.2f GB\n",(st-sf)/1048576
-            printf "  SWAP USADA:       %.1f%%\n",(st-sf)*100/st
-        } else {
-            print "  SWAP: NO CONFIGURADA"
-        }
-    }' 
-fi
-
-printf '\n  PROCESOS DE MAYOR CONSUMO RAM\n'
-run ps -eo pid,user,%mem,rss,stat,comm --sort=-%mem |
-    head -n 9
-
-if [[ -r /proc/vmstat ]]; then
-    printf '\n  ACTIVIDAD DE MEMORIA VIRTUAL\n'
-    awk '
-    /pswpin|pswpout|pgmajfault|oom_kill/ {
-        print "  " $1 ": " $2
-    }' /proc/vmstat
-fi
-
-# ------------------------------------------------------------
-# 3. USUARIOS Y SESIONES
-# ------------------------------------------------------------
-
-title "03. USUARIOS Y ACTIVIDAD"
-
-info "SESIONES ACTIVAS" "$(who 2>/dev/null | wc -l)"
-info "USUARIOS CONECTADOS" "$(who 2>/dev/null | awk '{print $1}' | sort -u | wc -l)"
-
-printf '\n  SESIONES ACTUALES\n'
-run who
-
-printf '\n  ACTIVIDAD DEL SISTEMA\n'
-run w
-
-printf '\n  PROCESOS POR USUARIO\n'
-ps -eo user= 2>/dev/null |
-    awk '{c[$1]++}
-    END {
-        for(u in c) printf "  %-20s %d procesos\n",u,c[u]
-    }' | sort -k3nr | head -n 15
-
-printf '\n  PROCESOS DE USUARIOS\n'
-run ps -eo user,pid,ppid,%cpu,%mem,stat,comm --sort=-%cpu |
-    head -n 16
-
-# ------------------------------------------------------------
-# 4. INTERFACES Y TRAFICO DE RED
-# ------------------------------------------------------------
-
-title "04. TRAFICO DE RED"
-
-if [[ -r /proc/net/dev ]]; then
-
-    printf '\n  CONTADORES ACUMULADOS DE INTERFACES\n'
-
-    awk -F'[: ]+' 'NR>2 {
-        iface=$2
-        if(iface!="") {
-            printf "  %-12s RX: %s bytes | TX: %s bytes\n",
-            iface,$3,$11
-            printf "  %-12s RX errores: %s | RX drops: %s | TX errores: %s | TX drops: %s\n",
-            "",$4,$5,$12,$13
-        }
-    }' /proc/net/dev
-
-    printf '\n  VELOCIDAD APROXIMADA DURANTE %s SEGUNDOS\n' "$INTERVAL"
-
-    TMP1=$(mktemp 2>/dev/null || echo "")
-    TMP2=$(mktemp 2>/dev/null || echo "")
-
-    if [[ -n "$TMP1" && -n "$TMP2" ]]; then
-        awk -F'[: ]+' 'NR>2 && $2!="" {
-            print $2,$3,$11
-        }' /proc/net/dev > "$TMP1"
-
-        sleep "$INTERVAL"
-
-        awk -F'[: ]+' 'NR>2 && $2!="" {
-            print $2,$3,$11
-        }' /proc/net/dev > "$TMP2"
-
-        awk -v t="$INTERVAL" '
-        NR==FNR {
-            rx[$1]=$2
-            tx[$1]=$3
-            next
-        }
-        {
-            drx=$2-rx[$1]
-            dtx=$3-tx[$1]
-            if(drx<0)drx=0
-            if(dtx<0)dtx=0
-            printf "  %-12s RX: %.2f KB/s | TX: %.2f KB/s\n",
-            $1,drx/1024/t,dtx/1024/t
-        }' "$TMP1" "$TMP2"
-
-        rm -f "$TMP1" "$TMP2"
-    fi
-fi
-
-# ------------------------------------------------------------
-# 5. TCP Y RETRANSMISIONES
-# ------------------------------------------------------------
-
-title "05. ESTADISTICAS TCP"
-
-if [[ -r /proc/net/snmp ]]; then
-    awk '
-    /^Tcp:/ {
-        if(!header) {
-            for(i=2;i<=NF;i++) h[i]=$i
-            header=1
-        } else {
-            for(i=2;i<=NF;i++) v[h[i]]=$i
-            header=0
-        }
+    [[ -r /etc/os-release ]] && {
+        . /etc/os-release
+        value "Distribucion:" "${PRETTY_NAME:-N/D}"
     }
-    END {
-        split("ActiveOpens PassiveOpens AttemptFails EstabResets CurrEstab InSegs OutSegs RetransSegs",a," ")
-        for(i in a)
-            if(a[i] in v)
-                printf "  %-20s %s\n",a[i],v[a[i]]
-    }' /proc/net/snmp
-fi
 
-if [[ -r /proc/net/netstat ]]; then
-    printf '\n  EXTENSIONES TCP\n'
-    awk '
-    /^TcpExt:/ {
-        if(!h) {
-            for(i=2;i<=NF;i++) names[i]=$i
-            h=1
-        } else {
-            for(i=2;i<=NF;i++) {
-                if(names[i] ~ /ListenDrops|ListenOverflows|TCPAbortOn|TCPSynRetrans|TCPTimeouts/)
-                    printf "  %-25s %s\n",names[i],$i
-            }
-            h=0
-        }
-    }' /proc/net/netstat
-fi
+    value "Hostname:" "$(hostname 2>/dev/null)"
+    value "Kernel:" "$(uname -r)"
+    value "Arquitectura:" "$(uname -m)"
+    value "Version kernel:" "$(uname -v)"
+    value "Tiempo encendido:" "$(uptime -p 2>/dev/null)"
+    value "Fecha:" "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+    value "Virtualizacion:" "$(systemd-detect-virt 2>/dev/null || echo N/D)"
+    value "PID 1:" "$(ps -p 1 -o comm= 2>/dev/null)"
+    value "Cantidad de CPU:" "$(nproc 2>/dev/null)"
+    value "Procesos activos:" "$(ps -e --no-headers 2>/dev/null | wc -l)"
 
-# ------------------------------------------------------------
-# 6. CONEXIONES Y PUERTOS
-# ------------------------------------------------------------
+    if [[ -r /proc/cmdline ]]; then
+        value "Parametros de arranque:" "$(cat /proc/cmdline)"
+    fi
 
-title "06. CONEXIONES Y SOCKETS"
+    if cmd lsb_release; then
+        value "Distribucion LSB:" "$(lsb_release -ds 2>/dev/null)"
+    fi
+}
 
-if have ss; then
-    printf '\n  RESUMEN DE SOCKETS\n'
-    ss -s 2>/dev/null || true
+# ============================================================
+# 02. CPU
+# ============================================================
 
-    printf '\n  CONEXIONES TCP ESTABLECIDAS\n'
-    EST=$(ss -Htan state established 2>/dev/null | wc -l)
-    info "ESTABLISHED" "$EST"
+cpu_info() {
+    section "02. CPU Y PROCESAMIENTO"
 
-    printf '\n  DISTRIBUCION TCP\n'
-    ss -Htan 2>/dev/null |
-        awk '{c[$1]++}
-        END {
-            for(s in c) printf "  %-20s %d\n",s,c[s]
-        }' | sort
+    value "Modelo:" "$(awk -F: '/model name/ {gsub(/^[ \t]+/,"",$2); print $2; exit}' /proc/cpuinfo)"
+    value "Nucleos disponibles:" "$(nproc)"
+    value "Load average:" "$(cat /proc/loadavg)"
+    value "CPU online:" "$(cat /sys/devices/system/cpu/online 2>/dev/null)"
+    value "CPU governor:" "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)"
+    value "Frecuencia actual:" "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null)"
+    value "Frecuencia minima:" "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq 2>/dev/null)"
+    value "Frecuencia maxima:" "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null)"
+    value "CPU idle:" "$(grep '^cpu ' /proc/stat)"
 
-    printf '\n  PUERTOS EN ESCUCHA\n'
-    ss -lntup 2>/dev/null | head -n 35
+    printf '\n  TOP PROCESOS POR CPU\n'
+    ps -eo pid,comm,%cpu,%mem --sort=-%cpu 2>/dev/null | head -11
 
-    printf '\n  CONEXIONES ESTABLECIDAS Y PROCESOS\n'
-    ss -tnp state established 2>/dev/null | head -n 25
+    printf '\n  INTERRUPCIONES\n'
+    head -12 /proc/interrupts 2>/dev/null || true
 
-else
-    warn "ss no esta instalado; comprobando netstat"
-    run netstat -tulpen
-fi
+    printf '\n  CONTEXT SWITCHES\n'
+    grep -E 'ctxt|processes|procs_running|procs_blocked' /proc/stat
+}
 
-# ------------------------------------------------------------
-# 7. PROCESOS Y SERVICIOS
-# ------------------------------------------------------------
+# ============================================================
+# 03. MEMORY
+# ============================================================
 
-title "07. SERVICIOS Y PROCESOS"
+memory_info() {
+    section "03. MEMORIA RAM Y SWAP"
 
-if have systemctl; then
-    info "SERVICIOS ACTIVOS" \
-        "$(systemctl list-units --type=service --state=running --no-legend 2>/dev/null | wc -l)"
+    free -h
 
-    info "SERVICIOS FALLIDOS" \
-        "$(systemctl --failed --type=service --no-legend 2>/dev/null | wc -l)"
+    printf '\n  DETALLE DE MEMORIA\n'
+    grep -E '^(MemTotal|MemFree|MemAvailable|Buffers|Cached|SReclaimable|Shmem|SwapTotal|SwapFree|Dirty|Writeback|Slab|PageTables|KernelStack|Unevictable|Mlocked|Committed_AS|CommitLimit):' /proc/meminfo
+
+    printf '\n  SWAPPINESS Y VM\n'
+    for key in \
+        vm.swappiness \
+        vm.vfs_cache_pressure \
+        vm.dirty_ratio \
+        vm.dirty_background_ratio \
+        vm.dirty_bytes \
+        vm.dirty_background_bytes \
+        vm.overcommit_memory \
+        vm.overcommit_ratio \
+        vm.min_free_kbytes \
+        vm.zone_reclaim_mode \
+        vm.page-cluster \
+        vm.max_map_count
+    do
+        sysctl "$key" 2>/dev/null || true
+    done
+
+    printf '\n  PRESION DE MEMORIA (PSI)\n'
+    for f in /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io; do
+        if [[ -r "$f" ]]; then
+            printf '\n  %s\n' "$f"
+            cat "$f"
+        fi
+    done
+
+    printf '\n  PROCESOS CON MAYOR CONSUMO RAM\n'
+    ps -eo pid,comm,%mem,rss --sort=-%mem 2>/dev/null | head -11
+
+    printf '\n  OOM EVENTS\n'
+    if [[ -r /proc/vmstat ]]; then
+        grep -E '^(oom_kill|pgmajfault|pswpin|pswpout|pgscan|pgsteal)' /proc/vmstat || true
+    fi
+}
+
+# ============================================================
+# 04. STORAGE AND I/O
+# ============================================================
+
+storage_info() {
+    section "04. ALMACENAMIENTO Y DISCO"
+
+    printf '\n  PARTICIONES\n'
+    df -hT
+
+    printf '\n  DISPOSITIVOS\n'
+    if cmd lsblk; then
+        lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINT,ROTA,SCHED 2>/dev/null || lsblk
+    fi
+
+    printf '\n  I/O SCHEDULER\n'
+    for f in /sys/block/*/queue/scheduler; do
+        [[ -r "$f" ]] || continue
+        printf '  %-24s %s\n' "$f" "$(cat "$f")"
+    done
+
+    printf '\n  PARAMETROS DE COLA DE DISCO\n'
+    for f in /sys/block/*/queue/{nr_requests,read_ahead_kb,rotational,rq_affinity,nomerges}; do
+        [[ -r "$f" ]] || continue
+        printf '  %-55s %s\n' "$f" "$(cat "$f")"
+    done
+
+    printf '\n  ESTADISTICAS DE DISCO\n'
+    cat /proc/diskstats 2>/dev/null
+
+    printf '\n  MONTAGENS\n'
+    findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true
+
+    if cmd iostat; then
+        printf '\n  IOSTAT\n'
+        iostat -xz 1 1 2>/dev/null || true
+    else
+        warn "Instala sysstat para obtener iostat."
+    fi
+}
+
+# ============================================================
+# 05. KERNEL
+# ============================================================
+
+kernel_info() {
+    section "05. KERNEL Y CONFIGURACION"
+
+    value "Kernel release:" "$(uname -r)"
+    value "Kernel version:" "$(uname -v)"
+    value "Kernel taint:" "$(cat /proc/sys/kernel/tainted 2>/dev/null)"
+    value "Modules cargados:" "$(lsmod 2>/dev/null | wc -l)"
+    value "Kernel lockdown:" "$(cat /sys/kernel/security/lockdown 2>/dev/null)"
+    value "Random entropy:" "$(cat /proc/sys/kernel/random/entropy_avail 2>/dev/null)"
+
+    printf '\n  PARAMETROS KERNEL\n'
+    for key in \
+        kernel.pid_max \
+        kernel.threads-max \
+        kernel.core_pattern \
+        kernel.core_uses_pid \
+        kernel.panic \
+        kernel.panic_on_oops \
+        kernel.sched_autogroup_enabled \
+        kernel.numa_balancing \
+        kernel.kptr_restrict \
+        kernel.dmesg_restrict \
+        kernel.perf_event_paranoid \
+        kernel.unprivileged_bpf_disabled \
+        kernel.yama.ptrace_scope
+    do
+        sysctl "$key" 2>/dev/null || true
+    done
+
+    printf '\n  MODULOS RELEVANTES\n'
+    lsmod 2>/dev/null | grep -Ei 'tcp|bbr|sch_fq|nf_conntrack|ip_tables|nf_tables|xt_' || true
+
+    printf '\n  ERRORES RECIENTES DEL KERNEL\n'
+    if cmd journalctl; then
+        journalctl -k -p err -n 30 --no-pager 2>/dev/null || true
+    elif cmd dmesg; then
+        dmesg --level=err,warn 2>/dev/null | tail -30 || true
+    fi
+}
+
+# ============================================================
+# 06. ALL SYSCTL
+# ============================================================
+
+all_sysctl() {
+    section "06. INVENTARIO COMPLETO SYSCTL"
+
+    info "Leyendo todos los parametros activos del kernel."
+    printf '\n'
+
+    sysctl -a 2>/dev/null | sort || true
+}
+
+# ============================================================
+# 07. TCP/IP
+# ============================================================
+
+tcp_info() {
+    section "07. OPTIMIZACION TCP/IP"
+
+    local keys=(
+        net.ipv4.ip_forward
+        net.ipv4.tcp_congestion_control
+        net.ipv4.tcp_available_congestion_control
+        net.ipv4.tcp_allowed_congestion_control
+        net.ipv4.tcp_available_ulp
+        net.ipv4.tcp_rmem
+        net.ipv4.tcp_wmem
+        net.ipv4.tcp_mem
+        net.core.rmem_max
+        net.core.rmem_default
+        net.core.wmem_max
+        net.core.wmem_default
+        net.core.optmem_max
+        net.core.netdev_max_backlog
+        net.core.netdev_budget
+        net.core.netdev_budget_usecs
+        net.core.somaxconn
+        net.core.default_qdisc
+        net.ipv4.tcp_max_syn_backlog
+        net.ipv4.tcp_max_tw_buckets
+        net.ipv4.tcp_max_orphans
+        net.ipv4.tcp_fin_timeout
+        net.ipv4.tcp_keepalive_time
+        net.ipv4.tcp_keepalive_intvl
+        net.ipv4.tcp_keepalive_probes
+        net.ipv4.tcp_retries1
+        net.ipv4.tcp_retries2
+        net.ipv4.tcp_syn_retries
+        net.ipv4.tcp_synack_retries
+        net.ipv4.tcp_syncookies
+        net.ipv4.tcp_fastopen
+        net.ipv4.tcp_sack
+        net.ipv4.tcp_dsack
+        net.ipv4.tcp_window_scaling
+        net.ipv4.tcp_timestamps
+        net.ipv4.tcp_ecn
+        net.ipv4.tcp_mtu_probing
+        net.ipv4.tcp_no_metrics_save
+        net.ipv4.tcp_moderate_rcvbuf
+        net.ipv4.tcp_notsent_lowat
+        net.ipv4.tcp_limit_output_bytes
+        net.ipv4.tcp_autocorking
+        net.ipv4.tcp_low_latency
+        net.ipv4.tcp_tw_reuse
+        net.ipv4.ip_local_port_range
+        net.ipv4.ip_local_reserved_ports
+        net.ipv4.route.gc_timeout
+        net.ipv4.neigh.default.gc_thresh1
+        net.ipv4.neigh.default.gc_thresh2
+        net.ipv4.neigh.default.gc_thresh3
+    )
+
+    for key in "${keys[@]}"; do
+        sysctl "$key" 2>/dev/null || true
+    done
+
+    printf '\n  ALGORITMOS TCP DISPONIBLES\n'
+    cat /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null || true
+
+    printf '\n  QDISC DISPONIBLES\n'
+    if cmd tc; then
+        tc qdisc show 2>/dev/null || true
+        printf '\n  DISCIPLINAS DISPONIBLES\n'
+        tc qdisc help 2>&1 | head -25 || true
+    fi
+
+    printf '\n  TCP GLOBAL\n'
+    cat /proc/net/snmp 2>/dev/null
+
+    printf '\n  TCP EXTENDIDO\n'
+    cat /proc/net/netstat 2>/dev/null
+
+    printf '\n  TCP SOCKET MEMORY\n'
+    cat /proc/net/sockstat 2>/dev/null
+    cat /proc/net/sockstat6 2>/dev/null || true
+}
+
+# ============================================================
+# 08. UDP / SOCKETS
+# ============================================================
+
+socket_info() {
+    section "08. UDP, SOCKETS Y CONEXIONES"
+
+    printf '\n  UDP CONFIGURACION\n'
+    for key in \
+        net.ipv4.udp_mem \
+        net.ipv4.udp_rmem_min \
+        net.ipv4.udp_wmem_min \
+        net.ipv4.udp_early_demux \
+        net.ipv4.udp_l3mdev_accept
+    do
+        sysctl "$key" 2>/dev/null || true
+    done
+
+    printf '\n  ESTADOS TCP\n'
+    if cmd ss; then
+        ss -s
+        printf '\n  CONEXIONES POR ESTADO\n'
+        ss -tanH 2>/dev/null | awk '{count[$1]++} END {for (s in count) print s, count[s]}' | sort
+        printf '\n  PUERTOS ESCUCHANDO\n'
+        ss -lntup 2>/dev/null || true
+        printf '\n  CONEXIONES ESTABLECIDAS\n'
+        ss -tan state established 2>/dev/null | head -30
+    fi
+
+    printf '\n  CONTEO DE SOCKETS\n'
+    for f in /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6; do
+        [[ -r "$f" ]] || continue
+        value "$f:" "$(( $(wc -l < "$f") - 1 ))"
+    done
+}
+
+# ============================================================
+# 09. CONNTRACK / FIREWALL
+# ============================================================
+
+firewall_info() {
+    section "09. NETFILTER, CONNTRACK Y FIREWALL"
+
+    for key in \
+        net.netfilter.nf_conntrack_max \
+        net.netfilter.nf_conntrack_count \
+        net.netfilter.nf_conntrack_buckets \
+        net.netfilter.nf_conntrack_tcp_timeout_established \
+        net.netfilter.nf_conntrack_tcp_timeout_time_wait \
+        net.netfilter.nf_conntrack_tcp_timeout_close_wait \
+        net.netfilter.nf_conntrack_udp_timeout \
+        net.netfilter.nf_conntrack_udp_timeout_stream
+    do
+        sysctl "$key" 2>/dev/null || true
+    done
+
+    printf '\n  CONNTRACK\n'
+    if [[ -r /proc/sys/net/netfilter/nf_conntrack_count ]]; then
+        value "Conexiones actuales:" "$(cat /proc/sys/net/netfilter/nf_conntrack_count)"
+        value "Limite maximo:" "$(cat /proc/sys/net/netfilter/nf_conntrack_max)"
+    fi
+
+    printf '\n  NFTABLES\n'
+    if cmd nft; then
+        nft list ruleset 2>/dev/null || warn "No se pudo leer nftables."
+    fi
+
+    printf '\n  IPTABLES\n'
+    if cmd iptables; then
+        iptables -L -n -v 2>/dev/null || true
+    fi
+
+    printf '\n  IP6TABLES\n'
+    if cmd ip6tables; then
+        ip6tables -L -n -v 2>/dev/null || true
+    fi
+
+    printf '\n  UFW\n'
+    if cmd ufw; then
+        ufw status verbose 2>/dev/null || true
+    fi
+}
+
+# ============================================================
+# 10. NETWORK INTERFACES
+# ============================================================
+
+network_info() {
+    section "10. INTERFACES DE RED"
+
+    printf '\n  INTERFACES\n'
+    if cmd ip; then
+        ip -br address 2>/dev/null || ip address
+        printf '\n  ROUTING\n'
+        ip route show 2>/dev/null
+        printf '\n  ROUTING IPv6\n'
+        ip -6 route show 2>/dev/null
+        printf '\n  RULES\n'
+        ip rule show 2>/dev/null
+    fi
+
+    printf '\n  PARAMETROS POR INTERFAZ\n'
+    for dir in /sys/class/net/*; do
+        [[ -d "$dir" ]] || continue
+        local iface
+        iface="${dir##*/}"
+
+        printf '\n  INTERFAZ: %s\n' "$iface"
+
+        for key in mtu tx_queue_len operstate speed duplex carrier \
+                   address type ifindex; do
+            [[ -r "$dir/$key" ]] || continue
+            printf '    %-18s %s\n' "$key" "$(cat "$dir/$key" 2>/dev/null)"
+        done
+
+        for key in rx_bytes tx_bytes rx_packets tx_packets \
+                   rx_errors tx_errors rx_dropped tx_dropped \
+                   collisions rx_missed_errors; do
+            [[ -r "$dir/statistics/$key" ]] || continue
+            printf '    %-18s %s\n' "$key" "$(cat "$dir/statistics/$key")"
+        done
+
+        if cmd ethtool; then
+            printf '\n    OFFLOADING\n'
+            ethtool -k "$iface" 2>/dev/null || true
+            printf '\n    DRIVER\n'
+            ethtool -i "$iface" 2>/dev/null || true
+        fi
+    done
+
+    printf '\n  TCP/IP INTERFACES\n'
+    for key in \
+        net.ipv4.conf.all.rp_filter \
+        net.ipv4.conf.default.rp_filter \
+        net.ipv4.conf.all.accept_redirects \
+        net.ipv4.conf.all.send_redirects \
+        net.ipv4.conf.all.accept_source_route \
+        net.ipv4.conf.all.log_martians \
+        net.ipv4.conf.all.arp_filter \
+        net.ipv4.conf.all.arp_ignore \
+        net.ipv4.conf.all.arp_announce \
+        net.ipv6.conf.all.disable_ipv6 \
+        net.ipv6.conf.all.accept_ra \
+        net.ipv6.conf.all.forwarding
+    do
+        sysctl "$key" 2>/dev/null || true
+    done
+}
+
+# ============================================================
+# 11. LIMITS
+# ============================================================
+
+limits_info() {
+    section "11. LIMITES DEL SISTEMA"
+
+    value "Ulimit actual:" "$(ulimit -a | tr '\n' ' ')"
+
+    printf '\n  LIMITES DEL PROCESO ACTUAL\n'
+    cat /proc/self/limits 2>/dev/null
+
+    printf '\n  FILE HANDLES\n'
+    for key in \
+        fs.file-max \
+        fs.nr_open \
+        fs.inotify.max_user_instances \
+        fs.inotify.max_user_watches \
+        fs.aio-max-nr \
+        fs.aio-nr
+    do
+        sysctl "$key" 2>/dev/null || true
+    done
+
+    printf '\n  FILE DESCRIPTORS DEL SISTEMA\n'
+    cat /proc/sys/fs/file-nr 2>/dev/null || true
+
+    printf '\n  PAM LIMITS\n'
+    if [[ -r /etc/security/limits.conf ]]; then
+        grep -Ev '^[[:space:]]*(#|$)' /etc/security/limits.conf || true
+    fi
+
+    printf '\n  LIMITS.D\n'
+    if [[ -d /etc/security/limits.d ]]; then
+        grep -RHnEv '^[[:space:]]*(#|$)' /etc/security/limits.d/ 2>/dev/null || true
+    fi
+}
+
+# ============================================================
+# 12. SYSTEMD
+# ============================================================
+
+systemd_info() {
+    section "12. SYSTEMD Y SERVICIOS"
+
+    if ! cmd systemctl; then
+        warn "Systemd no disponible."
+        return
+    fi
+
+    value "Version:" "$(systemctl --version | head -1)"
+    value "Servicios activos:" "$(systemctl list-units --type=service --state=running --no-legend 2>/dev/null | wc -l)"
+    value "Servicios fallidos:" "$(systemctl --failed --no-legend 2>/dev/null | wc -l)"
+
+    printf '\n  SERVICIOS HCR / BHTTP\n'
+    systemctl list-units --all --type=service --no-legend 2>/dev/null |
+        grep -Ei 'hcr-server|bhttp-server' || true
 
     printf '\n  SERVICIOS FALLIDOS\n'
-    systemctl --failed --type=service --no-pager 2>/dev/null || true
-fi
+    systemctl --failed --no-pager 2>/dev/null || true
 
-printf '\n  PROCESOS CON MAYOR CONSUMO\n'
-run ps -eo pid,ppid,user,%cpu,%mem,stat,etime,comm --sort=-%cpu |
-    head -n 16
+    printf '\n  DEFAULT LIMITS\n'
+    systemctl show --property=DefaultLimitNOFILE \
+        --property=DefaultTasksMax \
+        --property=DefaultTimeoutStartSec 2>/dev/null || true
 
-# ------------------------------------------------------------
-# 8. ALMACENAMIENTO
-# ------------------------------------------------------------
+    printf '\n  SYSTEMD MANAGER\n'
+    systemctl show --no-pager \
+        -p DefaultCPUAccounting \
+        -p DefaultMemoryAccounting \
+        -p DefaultTasksAccounting \
+        -p DefaultLimitNOFILE \
+        -p DefaultTasksMax 2>/dev/null || true
 
-title "08. DISCO Y ALMACENAMIENTO"
+    printf '\n  SERVICIOS HCR / BHTTP: CONFIGURACION\n'
+    while IFS= read -r service; do
+        [[ -n "$service" ]] || continue
+        printf '\n  %s\n' "$service"
+        systemctl show "$service" --no-pager \
+            -p ActiveState \
+            -p SubState \
+            -p MainPID \
+            -p LimitNOFILE \
+            -p TasksMax \
+            -p CPUQuotaPerSecUSec \
+            -p MemoryMax \
+            -p MemoryHigh \
+            -p OOMScoreAdjust \
+            -p Nice \
+            -p Restart \
+            -p ExecStart 2>/dev/null || true
+    done < <(
+        systemctl list-units --all --type=service --no-legend 2>/dev/null |
+        awk '{print $1}' | grep -E '^(hcr-server|bhttp-server).*\.service$' || true
+    )
+}
 
-printf '\n  ESPACIO DISPONIBLE\n'
-run df -hT -x tmpfs -x devtmpfs
+# ============================================================
+# 13. PERSISTENT CONFIGURATION
+# ============================================================
 
-printf '\n  INODOS\n'
-run df -i -x tmpfs -x devtmpfs
+persistent_info() {
+    section "13. CONFIGURACIONES PERSISTENTES"
 
-if have iostat; then
-    printf '\n  ACTIVIDAD DE DISCOS\n'
-    iostat -xz 1 2 2>/dev/null | tail -n 20
-else
-    warn "iostat no disponible; metricas I/O avanzadas no disponibles"
-fi
-
-if [[ -r /proc/diskstats ]]; then
-    printf '\n  CONTADORES DE DISPOSITIVOS\n'
-    awk '{
-        printf "  %-12s lecturas: %s | escrituras: %s\n",
-        $3,$4,$8
-    }' /proc/diskstats | head -n 15
-fi
-
-# ------------------------------------------------------------
-# 9. KERNEL Y LIMITES
-# ------------------------------------------------------------
-
-title "09. KERNEL Y LIMITES"
-
-for key in \
-    net.core.somaxconn \
-    net.core.netdev_max_backlog \
-    net.ipv4.tcp_max_syn_backlog \
-    net.ipv4.ip_local_port_range \
-    net.ipv4.tcp_fin_timeout \
-    net.ipv4.tcp_max_tw_buckets \
-    fs.file-max
-do
-    val=$(sysctl -n "$key" 2>/dev/null || echo N/D)
-    info "$key" "$val"
-done
-
-printf '\n  LIMITES DEL PROCESO ACTUAL\n'
-ulimit -a 2>/dev/null | head -n 15
-
-printf '\n  CONNTRACK\n'
-
-if [[ -r /proc/sys/net/netfilter/nf_conntrack_count ]]; then
-    CURRENT=$(cat /proc/sys/net/netfilter/nf_conntrack_count)
-    MAXIMUM=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)
-
-    info "CONEXIONES TRACKED" "$CURRENT"
-    info "MAXIMO CONNTRACK" "$MAXIMUM"
-
-    if (( MAXIMUM > 0 )); then
-        PERCENT=$((CURRENT*100/MAXIMUM))
-        info "USO CONNTRACK" "${PERCENT}%"
-        (( PERCENT >= 90 )) && warn "Conntrack cerca del limite"
+    printf '\n  /etc/sysctl.conf\n'
+    if [[ -r /etc/sysctl.conf ]]; then
+        grep -nEv '^[[:space:]]*(#|$)' /etc/sysctl.conf || true
     fi
-else
-    warn "Conntrack no disponible o modulo no expuesto"
-fi
 
-# ------------------------------------------------------------
-# 10. CONFIGURACION DE RED
-# ------------------------------------------------------------
+    printf '\n  /etc/sysctl.d/\n'
+    if [[ -d /etc/sysctl.d ]]; then
+        find /etc/sysctl.d -maxdepth 1 -type f -name '*.conf' -print 2>/dev/null |
+        sort |
+        while IFS= read -r file; do
+            printf '\n  FILE: %s\n' "$file"
+            grep -nEv '^[[:space:]]*(#|$)' "$file" || true
+        done
+    fi
 
-title "10. INTERFACES Y RUTAS"
+    printf '\n  /usr/lib/sysctl.d Y /lib/sysctl.d\n'
+    for dir in /usr/lib/sysctl.d /lib/sysctl.d /run/sysctl.d; do
+        [[ -d "$dir" ]] || continue
+        find "$dir" -maxdepth 1 -type f -name '*.conf' -print 2>/dev/null | sort
+    done
 
-if have ip; then
-    printf '\n  DIRECCIONES IP\n'
-    ip -brief address 2>/dev/null || ip address 2>/dev/null
+    printf '\n  SYSCTL CONFIGURACIONES DE RED\n'
+    for dir in /etc/NetworkManager/conf.d /etc/systemd/network; do
+        [[ -d "$dir" ]] || continue
+        find "$dir" -maxdepth 2 -type f -print 2>/dev/null
+    done
 
-    printf '\n  RUTAS\n'
-    ip route 2>/dev/null
+    printf '\n  GRUB KERNEL PARAMETERS\n'
+    if [[ -r /etc/default/grub ]]; then
+        grep -nE 'GRUB_CMDLINE_LINUX|GRUB_DEFAULT' /etc/default/grub || true
+    fi
+}
 
-    printf '\n  ESTADISTICAS DE INTERFACES\n'
-    ip -s link 2>/dev/null | head -n 55
+# ============================================================
+# 14. SECURITY
+# ============================================================
 
-    printf '\n  COLAS DE RED\n'
-    tc qdisc show 2>/dev/null || true
-fi
+security_info() {
+    section "14. SEGURIDAD DEL SISTEMA"
 
-# ------------------------------------------------------------
-# 11. DNS Y CONECTIVIDAD
-# ------------------------------------------------------------
+    for key in \
+        kernel.kptr_restrict \
+        kernel.dmesg_restrict \
+        kernel.randomize_va_space \
+        kernel.yama.ptrace_scope \
+        kernel.unprivileged_bpf_disabled \
+        net.ipv4.tcp_syncookies \
+        net.ipv4.conf.all.accept_redirects \
+        net.ipv4.conf.all.send_redirects \
+        net.ipv4.conf.all.accept_source_route \
+        net.ipv4.conf.all.rp_filter \
+        net.ipv6.conf.all.accept_redirects
+    do
+        sysctl "$key" 2>/dev/null || true
+    done
 
-title "11. DNS Y CONECTIVIDAD"
+    printf '\n  SECURITY STATUS\n'
+    if cmd aa-status; then
+        aa-status 2>/dev/null | head -20 || true
+    fi
 
-if [[ -r /etc/resolv.conf ]]; then
-    printf '\n  CONFIGURACION DNS\n'
-    grep -E '^[[:space:]]*nameserver|^[[:space:]]*search' \
-        /etc/resolv.conf 2>/dev/null || true
-fi
+    if cmd sestatus; then
+        sestatus 2>/dev/null || true
+    fi
 
-if have getent; then
-    printf '\n  RESOLUCION DNS\n'
-    if getent ahosts deb.debian.org >/dev/null 2>&1; then
-        ok "Resolucion DNS funcional"
+    printf '\n  SSH CONFIGURACION EFECTIVA\n'
+    if cmd sshd; then
+        sshd -T 2>/dev/null |
+            grep -E '^(maxsessions|maxstartups|clientaliveinterval|clientalivecountmax|tcpkeepalive|usepam|permitrootlogin)' || true
+    fi
+}
+
+# ============================================================
+# 15. SERVICES / PROCESS RESOURCE
+# ============================================================
+
+process_info() {
+    section "15. PROCESOS Y RECURSOS"
+
+    printf '\n  PROCESOS\n'
+    ps -eo pid,ppid,user,stat,ni,pri,%cpu,%mem,rss,comm --sort=-%cpu 2>/dev/null | head -25
+
+    printf '\n  PROCESOS EN ESTADO D\n'
+    ps -eo pid,stat,comm 2>/dev/null | awk '$2 ~ /^D/'
+
+    printf '\n  PROCESOS ZOMBIE\n'
+    ps -eo pid,ppid,stat,comm 2>/dev/null | awk '$3 ~ /^Z/'
+
+    printf '\n  THREADS\n'
+    value "Total threads:" "$(ps -eLf --no-headers 2>/dev/null | wc -l)"
+
+    printf '\n  RUN QUEUE\n'
+    cat /proc/loadavg 2>/dev/null
+
+    printf '\n  SCHEDULER\n'
+    for f in /proc/sys/kernel/sched_*; do
+        [[ -r "$f" ]] || continue
+        printf '  %-55s %s\n' "$f" "$(cat "$f" 2>/dev/null)"
+    done
+}
+
+# ============================================================
+# 16. DIAGNOSTIC FINDINGS
+# ============================================================
+
+diagnostics() {
+    section "16. ANALISIS AUTOMATICO DE HALLAZGOS"
+
+    local mem_total mem_available swap_total
+    local file_max file_used conntrack_count conntrack_max
+    local syn_backlog somaxconn backlog
+    local retrans syncookies congestion qdisc
+
+    mem_total=$(awk '/MemTotal:/ {print $2}' /proc/meminfo)
+    mem_available=$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)
+    swap_total=$(awk '/SwapTotal:/ {print $2}' /proc/meminfo)
+
+    if [[ "$mem_total" =~ ^[0-9]+$ && "$mem_available" =~ ^[0-9]+$ && "$mem_total" -gt 0 ]]; then
+        local used_percent=$(( (mem_total - mem_available) * 100 / mem_total ))
+        value "RAM utilizada aproximada:" "${used_percent}%"
+
+        if (( used_percent >= 90 )); then
+            bad "Uso de RAM critico."
+        elif (( used_percent >= 80 )); then
+            warn "Uso elevado de RAM."
+        else
+            ok "Disponibilidad de RAM sin alerta critica."
+        fi
+    fi
+
+    if [[ "$swap_total" =~ ^[0-9]+$ ]] && (( swap_total > 0 )); then
+        ok "SWAP habilitada."
     else
-        warn "No se pudo resolver deb.debian.org"
+        warn "No se detecta SWAP habilitada."
     fi
-fi
 
-if have ping; then
-    printf '\n  CONECTIVIDAD IP\n'
-    ping -c 2 -W 2 1.1.1.1 2>/dev/null |
-        tail -n 3 || warn "Sin respuesta ICMP o ICMP bloqueado"
-fi
+    file_max=$(cat /proc/sys/fs/file-max 2>/dev/null || echo 0)
+    read -r file_used _ < /proc/sys/fs/file-nr 2>/dev/null || file_used=0
 
-# ------------------------------------------------------------
-# 12. FIREWALL
-# ------------------------------------------------------------
-
-title "12. FIREWALL"
-
-if have nft; then
-    info "NFTABLES" "$(nft list tables 2>/dev/null | wc -l) tablas"
-fi
-
-if have iptables; then
-    info "IPTABLES" "$(iptables -S 2>/dev/null | wc -l) reglas"
-fi
-
-if have ufw; then
-    info "UFW" "$(ufw status 2>/dev/null | head -n 1)"
-fi
-
-# ------------------------------------------------------------
-# 13. ERRORES DEL SISTEMA
-# ------------------------------------------------------------
-
-title "13. EVENTOS Y ERRORES"
-
-if have journalctl; then
-    printf '\n  ULTIMOS ERRORES DEL SISTEMA\n'
-    journalctl -p err -n 20 --no-pager -o short-iso 2>/dev/null |
-        tail -n 20 || true
-else
-    warn "Journalctl no disponible"
-fi
-
-if have dmesg; then
-    printf '\n  EVENTOS DEL KERNEL\n'
-    dmesg 2>/dev/null |
-        grep -Ei 'oom|out of memory|killed process|blocked for more than|NETDEV WATCHDOG|I/O error|link is down|reset' |
-        tail -n 15 || true
-fi
-
-# ------------------------------------------------------------
-# 14. RESUMEN DE DIAGNOSTICO
-# ------------------------------------------------------------
-
-title "14. INDICADORES DE RENDIMIENTO"
-
-WARNINGS=0
-
-if [[ -n "${CPU_USAGE:-}" ]] && (( CPU_USAGE >= 90 )); then
-    bad "CPU con utilizacion igual o superior al 90%"
-    WARNINGS=$((WARNINGS+1))
-fi
-
-if [[ -r /proc/meminfo ]]; then
-    MEM_RESULT=$(awk '
-    /^MemTotal:/ {t=$2}
-    /^MemAvailable:/ {a=$2}
-    END {
-        if(t>0) printf "%d",a*100/t
-        else print 100
-    }' /proc/meminfo)
-
-    if (( MEM_RESULT < 10 )); then
-        bad "RAM disponible inferior al 10%"
-        WARNINGS=$((WARNINGS+1))
+    if [[ "$file_max" =~ ^[0-9]+$ && "$file_used" =~ ^[0-9]+$ && "$file_max" -gt 0 ]]; then
+        value "File handles utilizados:" "$file_used / $file_max"
+        if (( file_used * 100 / file_max >= 90 )); then
+            warn "Descriptores de archivo cercanos al limite."
+        fi
     fi
-fi
 
-if [[ -r /proc/loadavg ]]; then
-    LOAD1=$(awk '{print int($1)}' /proc/loadavg)
-    if (( LOAD1 > CORES )); then
-        warn "Carga del sistema superior al numero de nucleos"
-        WARNINGS=$((WARNINGS+1))
+    conntrack_count=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
+    conntrack_max=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)
+
+    if [[ "$conntrack_count" =~ ^[0-9]+$ && "$conntrack_max" =~ ^[0-9]+$ && "$conntrack_max" -gt 0 ]]; then
+        value "Conntrack:" "$conntrack_count / $conntrack_max"
+        if (( conntrack_count * 100 / conntrack_max >= 85 )); then
+            warn "Conntrack se encuentra cerca de su limite."
+        else
+            ok "Conntrack con margen disponible."
+        fi
     fi
-fi
 
-DISK_RESULT=$(df -P -x tmpfs -x devtmpfs / 2>/dev/null |
-    awk 'NR==2 {gsub("%","",$5);print $5}')
+    syn_backlog=$(sysctl -n net.ipv4.tcp_max_syn_backlog 2>/dev/null || echo N/D)
+    somaxconn=$(sysctl -n net.core.somaxconn 2>/dev/null || echo N/D)
+    backlog=$(sysctl -n net.core.netdev_max_backlog 2>/dev/null || echo N/D)
 
-if [[ "$DISK_RESULT" =~ ^[0-9]+$ ]] && (( DISK_RESULT >= 90 )); then
-    bad "Disco raiz con ocupacion igual o superior al 90%"
-    WARNINGS=$((WARNINGS+1))
-fi
+    value "TCP SYN backlog:" "$syn_backlog"
+    value "Socket backlog:" "$somaxconn"
+    value "Network backlog:" "$backlog"
 
-if [[ "$WARNINGS" -eq 0 ]]; then
-    ok "No se detectaron alertas en los umbrales basicos"
-else
-    warn "Indicadores que requieren investigacion: $WARNINGS"
-fi
+    congestion=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo N/D)
+    qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo N/D)
 
-printf '\n'
-line
-printf '  %bDIAGNOSTICO FINALIZADO%b\n' "$GREEN$B" "$R"
-printf '  %bNo se realizaron modificaciones al sistema.%b\n' "$D" "$R"
-printf '  %bE P R O   D E V%b\n' "$CYAN" "$R"
-line
-printf '\n'
+    value "Congestion control:" "$congestion"
+    value "Default qdisc:" "$qdisc"
+
+    if [[ "$congestion" == bbr ]]; then
+        ok "BBR aparece como algoritmo congestion control activo."
+    else
+        warn "El algoritmo TCP activo no es BBR."
+    fi
+
+    if [[ "$qdisc" == fq ]]; then
+        ok "Qdisc por defecto configurado como fq."
+    else
+        warn "La qdisc por defecto no aparece como fq."
+    fi
+
+    syncookies=$(sysctl -n net.ipv4.tcp_syncookies 2>/dev/null || echo N/D)
+    value "TCP SYN cookies:" "$syncookies"
+
+    printf '\n  CONTADORES DE RETRANSMISION\n'
+    if [[ -r /proc/net/snmp ]]; then
+        awk '
+        /^Tcp:/ {
+            if (!header) {
+                for (i=1; i<=NF; i++) names[i]=$i
+                header=1
+            } else {
+                for (i=1; i<=NF; i++)
+                    if (names[i] == "RetransSegs")
+                        print "  RetransSegs:", $i
+                header=0
+            }
+        }' /proc/net/snmp
+    fi
+
+    printf '\n  ERRORES DE INTERFACES\n'
+    for f in /sys/class/net/*/statistics/{rx_errors,tx_errors,rx_dropped,tx_dropped}; do
+        [[ -r "$f" ]] || continue
+        local n
+        n=$(cat "$f")
+        if [[ "$n" =~ ^[0-9]+$ ]] && (( n > 0 )); then
+            warn "${f%/statistics/*}: ${f##*/} = $n"
+        fi
+    done
+
+    printf '\n  SERVICIOS FALLIDOS\n'
+    if cmd systemctl; then
+        local failed
+        failed=$(systemctl --failed --no-legend 2>/dev/null | wc -l)
+        if (( failed > 0 )); then
+            warn "Se detectan servicios fallidos."
+        else
+            ok "No se detectan servicios fallidos."
+        fi
+    fi
+
+    printf '\n  NOTA TECNICA\n'
+    info "Los valores elevados no son necesariamente optimos."
+    info "La configuracion adecuada depende de RAM, CPU, NIC y carga."
+    info "Las retransmisiones y errores deben evaluarse en intervalos."
+    info "BBR y fq deben verificarse tambien en la interfaz real."
+}
+
+# ============================================================
+# 17. SUMMARY
+# ============================================================
+
+summary() {
+    section "17. RESUMEN DEL SISTEMA"
+
+    value "Sistema:" "$(uname -s)"
+    value "Kernel:" "$(uname -r)"
+    value "CPU:" "$(nproc)"
+    value "RAM:" "$(free -h | awk '/Mem:/ {print $2}')"
+    value "SWAP:" "$(free -h | awk '/Swap:/ {print $2}')"
+    value "Disco raiz:" "$(df -h / | awk 'NR==2 {print $2 " total / " $4 " disponible"}')"
+    value "TCP:" "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
+    value "QDISC:" "$(sysctl -n net.core.default_qdisc 2>/dev/null)"
+    value "SOMAXCONN:" "$(sysctl -n net.core.somaxconn 2>/dev/null)"
+    value "BACKLOG:" "$(sysctl -n net.core.netdev_max_backlog 2>/dev/null)"
+    value "FD MAX:" "$(sysctl -n fs.file-max 2>/dev/null)"
+
+    printf '\n'
+    line
+    printf '%b\n' "${GREEN}       AUDITORIA DEL SISTEMA COMPLETADA${RESET}"
+    printf '%b\n' "${WHITE}       EPRO DEV - SYSTEM PERFORMANCE${RESET}"
+    line
+    printf '\n'
+}
+
+# ============================================================
+# MAIN
+# ============================================================
+
+main() {
+    if [[ "${EUID}" -ne 0 ]]; then
+        printf '%b\n' "${YELLOW}Ejecuta este script como root para obtener una auditoria completa.${RESET}"
+        printf '  sudo bash %s\n' "$0"
+        exit 1
+    fi
+
+    header
+
+    system_info
+    cpu_info
+    memory_info
+    storage_info
+    kernel_info
+    tcp_info
+    socket_info
+    firewall_info
+    network_info
+    limits_info
+    systemd_info
+    persistent_info
+    security_info
+    process_info
+    diagnostics
+    summary
+}
+
+main "$@"
