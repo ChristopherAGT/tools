@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
@@ -25,8 +24,28 @@ GRAY='\033[38;5;245m'
 WHITE='\033[1;37m'
 RESET='\033[0m'
 
+# ------------------------------------------------------------
+# FUNCTIONS
+# ------------------------------------------------------------
+
 err() {
     printf "\n${RED}✗ %s${RESET}\n" "$*" >&2
+}
+
+show_title() {
+    local TITLE_WIDTH=9
+    local TERM_WIDTH
+    local PADDING
+
+    TERM_WIDTH=$(tput cols 2>/dev/null || printf '%s' "${COLUMNS:-80}")
+
+    [[ "$TERM_WIDTH" =~ ^[0-9]+$ ]] || TERM_WIDTH=80
+
+    PADDING=$(( (TERM_WIDTH - TITLE_WIDTH) / 2 ))
+    (( PADDING < 0 )) && PADDING=0
+
+    printf "\n%*s" "$PADDING" ""
+    printf "${BLUE}BHTTP${RESET} ${WHITE}FIX${RESET}\n\n"
 }
 
 TEMP_FILE=""
@@ -38,26 +57,21 @@ cleanup() {
     [[ -n "$CHECK_DIR" && -d "$CHECK_DIR" ]] && rm -rf "$CHECK_DIR"
     [[ -n "$LOG" && -f "$LOG" ]] && rm -f "$LOG"
 }
+
 trap cleanup EXIT
 
 clear 2>/dev/null || true
 
-# ------------------------------------------------------------
-# CENTERED HEADER
-# ------------------------------------------------------------
-
-printf "\n"
-printf "%*s${BLUE}BHTTP${RESET} ${WHITE}FIX${RESET}\n" 0 ""
-printf "\n"
+show_title
 
 # ------------------------------------------------------------
 # SPINNER
 # ------------------------------------------------------------
 
-run_spinner() {
-    local PID="$1"
+run_repair() {
+    local PID
+    local STATUS
     local FRAME=0
-    local MESSAGE=""
 
     local -a FRAMES=(
         "● ○ ○ ○ ○ ○"
@@ -68,31 +82,60 @@ run_spinner() {
         "○ ○ ○ ○ ○ ●"
     )
 
-    while kill -0 "$PID" 2>/dev/null; do
-        printf "\r\033[K${CYAN}%s${RESET}" "${FRAMES[$FRAME]}"
-        FRAME=$(( (FRAME + 1) % 6 ))
-        sleep 0.12
-    done
-}
-
-run_process() {
-    local STATUS
     LOG=$(mktemp)
 
-    "$@" >"$LOG" 2>&1 &
-    local PID=$!
+    (
+        set -Eeuo pipefail
 
-    run_spinner "$PID"
+        systemd-analyze verify "$CHECK_DIR/$SERVICE"
+
+        systemctl stop "$SERVICE"
+
+        if ! mv -f "$TEMP_FILE" "$UNIT"; then
+            systemctl start "$SERVICE" >/dev/null 2>&1 || true
+            exit 1
+        fi
+
+        systemctl daemon-reload
+
+        systemctl reset-failed "$SERVICE" >/dev/null 2>&1 || true
+
+        systemctl restart "$SERVICE"
+
+        sleep 2
+
+        systemctl is-active --quiet "$SERVICE"
+
+    ) >"$LOG" 2>&1 &
+
+    PID=$!
+
+    while kill -0 "$PID" 2>/dev/null; do
+        printf "\r\033[K${CYAN}%s${RESET}" "${FRAMES[$FRAME]}"
+
+        FRAME=$(( (FRAME + 1) % 6 ))
+
+        sleep 0.12
+    done
 
     if wait "$PID"; then
+        printf "\r\033[K"
         rm -f "$LOG"
         LOG=""
         return 0
     else
         STATUS=$?
+
         printf "\r\033[K"
-        err "No se pudo completar el proceso."
-        tail -n 8 "$LOG" >&2 || true
+
+        err "No se pudo completar la reparación."
+
+        if [[ -s "$LOG" ]]; then
+            tail -n 8 "$LOG" >&2 || true
+        fi
+
+        journalctl -u "$SERVICE" -n 8 --no-pager 2>/dev/null || true
+
         return "$STATUS"
     fi
 }
@@ -200,6 +243,7 @@ while (( i < ${#ARGS[@]} )); do
 
         --port|-port)
             i=$((i + 1))
+
             (( i < ${#ARGS[@]} )) || {
                 err "Falta el valor de --port."
                 exit 1
@@ -226,6 +270,7 @@ while (( i < ${#ARGS[@]} )); do
 
         --ssh|-ssh)
             i=$((i + 1))
+
             (( i < ${#ARGS[@]} )) || {
                 err "Falta el valor de --ssh."
                 exit 1
@@ -252,6 +297,7 @@ while (( i < ${#ARGS[@]} )); do
 
         -listen|--listen)
             i=$((i + 1))
+
             (( i < ${#ARGS[@]} )) || {
                 err "Falta el valor de -listen."
                 exit 1
@@ -278,6 +324,7 @@ while (( i < ${#ARGS[@]} )); do
 
         -target|--target)
             i=$((i + 1))
+
             (( i < ${#ARGS[@]} )) || {
                 err "Falta el valor de -target."
                 exit 1
@@ -304,6 +351,7 @@ while (( i < ${#ARGS[@]} )); do
 
         -bhttp-v2-max-lanes|-session-timeout|-tls-cert|-tls-key|-xhttp-listen)
             i=$((i + 1))
+
             (( i < ${#ARGS[@]} )) || {
                 err "Falta el valor de $ARG."
                 exit 1
@@ -366,7 +414,9 @@ fi
 
 valid_port() {
     local P="$1"
+
     [[ "$P" =~ ^[0-9]{1,5}$ ]] || return 1
+
     (( 10#$P >= 1 && 10#$P <= 65535 ))
 }
 
@@ -468,50 +518,19 @@ chown --reference="$UNIT" "$TEMP_FILE"
 chmod --reference="$UNIT" "$TEMP_FILE"
 
 CHECK_DIR=$(mktemp -d)
+
 cp "$TEMP_FILE" "$CHECK_DIR/$SERVICE"
 
 # ------------------------------------------------------------
 # EXECUTION
 # ------------------------------------------------------------
 
-if ! run_process systemd-analyze verify "$CHECK_DIR/$SERVICE"; then
-    err "Configuración no válida."
-    exit 1
-fi
-
-if ! run_process systemctl stop "$SERVICE"; then
-    err "No se pudo detener BHTTP."
-    exit 1
-fi
-
-if ! mv -f "$TEMP_FILE" "$UNIT"; then
-    err "No se pudo aplicar la configuración."
-    systemctl start "$SERVICE" || true
+if ! run_repair; then
+    err "BHTTP no pudo completar la reparación."
     exit 1
 fi
 
 TEMP_FILE=""
-
-if ! run_process systemctl daemon-reload; then
-    err "No se pudo recargar systemd."
-    exit 1
-fi
-
-systemctl reset-failed "$SERVICE" >/dev/null 2>&1 || true
-
-if ! run_process systemctl restart "$SERVICE"; then
-    err "BHTTP no pudo iniciar."
-    journalctl -u "$SERVICE" -n 8 --no-pager 2>/dev/null || true
-    exit 1
-fi
-
-sleep 2
-
-if ! systemctl is-active --quiet "$SERVICE"; then
-    err "BHTTP no consiguió mantenerse activo."
-    journalctl -u "$SERVICE" -n 8 --no-pager 2>/dev/null || true
-    exit 1
-fi
 
 # ------------------------------------------------------------
 # FINAL RESULT
@@ -519,9 +538,7 @@ fi
 
 clear 2>/dev/null || true
 
-printf "\n"
-printf "%*s${BLUE}BHTTP${RESET} ${WHITE}FIX${RESET}\n" 0 ""
-printf "\n"
+show_title
 
 printf "  ${GRAY}Puerto Configurado:${RESET}       ${CYAN}%s${RESET}\n" \
     "${LISTENERS[0]##*:}"
@@ -530,5 +547,15 @@ printf "  ${GRAY}Puerto de Redirección:${RESET}    ${CYAN}%s${RESET}\n" \
     "$TARGET_PORT"
 
 printf "\n"
-printf "  ${GREEN}${WHITE}BHTTP FUNCIONANDO CORRECTAMENTE${RESET}\n"
+
+SUCCESS_TEXT="BHTTP FUNCIONANDO CORRECTEMENTE"
+TERM_WIDTH=$(tput cols 2>/dev/null || printf '%s' "${COLUMNS:-80}")
+[[ "$TERM_WIDTH" =~ ^[0-9]+$ ]] || TERM_WIDTH=80
+
+PADDING=$(( (TERM_WIDTH - ${#SUCCESS_TEXT}) / 2 ))
+(( PADDING < 0 )) && PADDING=0
+
+printf "%*s${GREEN}${WHITE}%s${RESET}\n" \
+    "$PADDING" "" "$SUCCESS_TEXT"
+
 printf "\n"
