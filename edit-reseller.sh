@@ -2,7 +2,7 @@
 # ============================================================
 # ADMRufu 2.0 | Gestor de nombre de Reseller
 # Autor: ChristopherAGT
-# Compatible: ADMRufu 2.0 y La Casita MX
+# Compatible: ADMRufu 2.0, La Casita MX y ChumoGH Plus
 # ============================================================
 
 # ── Colores ─────────────────────────────────────────────────
@@ -19,6 +19,9 @@ reset=$'\033[0m'
 # ── Configuración ────────────────────────────────────────────
 ARCHIVO=""
 INSTALACION=""
+ES_CHUMO=0
+ARCHIVOS_CHUMO=()
+
 ANCHO=48
 INTERIOR=$((ANCHO - 2))
 ANCHO_PANEL=48
@@ -160,21 +163,48 @@ pausa() {
 detectar_instalacion() {
     ARCHIVO=""
     INSTALACION=""
+    ES_CHUMO=0
+    ARCHIVOS_CHUMO=()
 
-    # Prioridad 1: ADMRufu 2.0.
-    # Se reconoce por su directorio de instalación o su archivo
-    # de reseller conocido.
-    if [[ -d "/etc/ADMRufu2.0" || -d "/etc/ADMRufu" || -f "/etc/reseller" ]]; then
+    # Prioridad 1: ChumoGH Plus.
+    if [[ -f "/etc/adm-lite/menu_credito" ||
+          -f "/usr/bin/ejecutar/menu_credito" ||
+          -f "/usr/bin/ejecutar/exito" ]]; then
+
+        INSTALACION="CHUMOGH PLUS"
+        ES_CHUMO=1
+
+        ARCHIVOS_CHUMO=(
+            "/etc/adm-lite/menu_credito"
+            "/usr/bin/ejecutar/menu_credito"
+            "/usr/bin/ejecutar/exito"
+        )
+
+    # Prioridad 2: ADMRufu 2.0.
+    elif [[ -d "/etc/ADMRufu2.0" || -d "/etc/ADMRufu" || -f "/etc/reseller" ]]; then
         ARCHIVO="/etc/reseller"
         INSTALACION="ADMRUFU 2.0"
 
-    # Prioridad 2: La Casita MX.
+    # Prioridad 3: La Casita MX.
     elif [[ -f "/etc/VPS-MX/message.txt" || -d "/etc/VPS-MX" ]]; then
         ARCHIVO="/etc/VPS-MX/message.txt"
         INSTALACION="LA CASITA MX"
 
     else
         return 1
+    fi
+
+    # Comprobar archivos de ChumoGH Plus.
+    if ((ES_CHUMO == 1)); then
+        local archivo
+
+        for archivo in "${ARCHIVOS_CHUMO[@]}"; do
+            if [[ ! -f "$archivo" || ! -w "$archivo" ]]; then
+                return 2
+            fi
+        done
+
+        return 0
     fi
 
     # Comprobar que el archivo existente sea escribible.
@@ -213,12 +243,21 @@ if ((estado_deteccion == 1)); then
     printf '%b\n' "${gris}Rutas reconocidas:${reset}"
     printf '%b\n' "${gris}ADMRufu 2.0: /etc/ADMRufu2.0 o /etc/reseller${reset}"
     printf '%b\n' "${gris}La Casita MX: /etc/VPS-MX/message.txt${reset}"
+    printf '%b\n' "${gris}ChumoGH Plus: /etc/adm-lite/menu_credito${reset}"
     pausa
     exit 1
 elif ((estado_deteccion == 2)); then
-    printf '%b\n' "${rojo}${negrita}ERROR:${reset} No se puede escribir en el archivo de destino."
+    printf '%b\n' "${rojo}${negrita}ERROR:${reset} No se puede escribir en los archivos de destino."
     printf '%b\n' "${gris}Instalación: $INSTALACION${reset}"
-    printf '%b\n' "${gris}Archivo: $ARCHIVO${reset}"
+
+    if ((ES_CHUMO == 1)); then
+        for archivo in "${ARCHIVOS_CHUMO[@]}"; do
+            printf '%b\n' "${gris}Archivo: $archivo${reset}"
+        done
+    else
+        printf '%b\n' "${gris}Archivo: $ARCHIVO${reset}"
+    fi
+
     pausa
     exit 1
 fi
@@ -234,7 +273,16 @@ borde_inferior
 printf '\n'
 
 # ── Leer reseller actual ─────────────────────────────────────
-if [[ -f "$ARCHIVO" ]]; then
+if ((ES_CHUMO == 1)); then
+    if ! actual=$(head -n 1 -- "${ARCHIVOS_CHUMO[0]}"); then
+        printf '%b\n' "${rojo}No se pudo leer el nombre actual.${reset}"
+        pausa
+        exit 1
+    fi
+
+    [[ -z "$actual" ]] && actual="(Archivo vacio)"
+
+elif [[ -f "$ARCHIVO" ]]; then
     if ! actual=$(cat -- "$ARCHIVO"); then
         printf '%b\n' "${rojo}No se pudo leer $ARCHIVO${reset}"
         pausa
@@ -304,24 +352,148 @@ case "$confirmar" in
 esac
 
 # ── Guardar nombre ───────────────────────────────────────────
-if ! printf '%s\n' "$final" > "$ARCHIVO"; then
-    printf '\n%b\n' "${rojo}${negrita}ERROR:${reset} No se pudo guardar el nombre."
-    printf '%b\n' "${gris}Archivo: $ARCHIVO${reset}"
-    pausa
-    exit 1
+if ((ES_CHUMO == 1)); then
+
+    if ! python3 - "$final" "${ARCHIVOS_CHUMO[@]}" <<'PY'
+import sys
+from pathlib import Path
+
+nuevo = sys.argv[1]
+rutas = sys.argv[2:]
+
+menu_credito = Path(rutas[0])
+menu_ejecutar = Path(rutas[1])
+exito = Path(rutas[2])
+
+# Leer los tres archivos antes de realizar modificaciones.
+try:
+    contenidos = {
+        ruta: Path(ruta).read_text(encoding="utf-8")
+        for ruta in rutas
+    }
+except Exception as error:
+    print(f"ERROR: No se pudieron leer los archivos: {error}")
+    sys.exit(1)
+
+# Separar líneas conservando sus terminaciones.
+lineas = {}
+
+for ruta, contenido in contenidos.items():
+    lineas[ruta] = contenido.splitlines(keepends=True)
+
+# Validar estructura de los archivos.
+for ruta in rutas:
+    if not lineas[ruta]:
+        print(f"ERROR: El archivo está vacío: {ruta}")
+        sys.exit(1)
+
+# Actualizar primera línea de menu_credito.
+ruta = str(menu_credito)
+linea = lineas[ruta][0]
+
+if linea.endswith("\r\n"):
+    terminacion = "\r\n"
+elif linea.endswith("\n"):
+    terminacion = "\n"
+else:
+    terminacion = ""
+
+lineas[ruta][0] = nuevo + terminacion
+
+# Actualizar primera línea del menú de ejecución.
+ruta = str(menu_ejecutar)
+linea = lineas[ruta][0]
+
+if linea.endswith("\r\n"):
+    terminacion = "\r\n"
+elif linea.endswith("\n"):
+    terminacion = "\n"
+else:
+    terminacion = ""
+
+lineas[ruta][0] = nuevo + terminacion
+
+# Actualizar nombre de exito conservando Verified【 .
+ruta = str(exito)
+linea = lineas[ruta][0]
+
+if linea.endswith("\r\n"):
+    terminacion = "\r\n"
+elif linea.endswith("\n"):
+    terminacion = "\n"
+else:
+    terminacion = ""
+
+contenido_linea = linea.rstrip("\r\n")
+prefijo = "Verified【 "
+
+if not contenido_linea.startswith(prefijo):
+    print(
+        "ERROR: El formato de exito no coincide con el esperado. "
+        "Se esperaba el prefijo Verified【 "
+    )
+    sys.exit(1)
+
+lineas[ruta][0] = prefijo + nuevo + terminacion
+
+# Preparar todos los contenidos antes de escribir.
+actualizados = {
+    ruta: "".join(lineas[ruta])
+    for ruta in rutas
+}
+
+# Guardar los cambios.
+try:
+    for ruta, contenido in actualizados.items():
+        Path(ruta).write_text(contenido, encoding="utf-8")
+except Exception as error:
+    print(f"ERROR: No se pudieron guardar todos los archivos: {error}")
+    sys.exit(1)
+
+print("OK")
+PY
+    then
+        printf '\n%b\n' "${rojo}${negrita}ERROR:${reset} No se pudo actualizar ChumoGH Plus."
+        pausa
+        exit 1
+    fi
+
+else
+    if ! printf '%s\n' "$final" > "$ARCHIVO"; then
+        printf '\n%b\n' "${rojo}${negrita}ERROR:${reset} No se pudo guardar el nombre."
+        printf '%b\n' "${gris}Archivo: $ARCHIVO${reset}"
+        pausa
+        exit 1
+    fi
 fi
 
-# ── Verificar escritura ──────────────────────────────────────
-if ! guardado=$(cat -- "$ARCHIVO"); then
-    printf '\n%b\n' "${rojo}No se pudo verificar el archivo.${reset}"
-    pausa
-    exit 1
-fi
+# ── Verificar escritura ───────────────────────────────────────
+if ((ES_CHUMO == 1)); then
 
-if [[ "$guardado" != "$final" ]]; then
-    printf '\n%b\n' "${rojo}${negrita}ERROR:${reset} El contenido guardado no coincide."
-    pausa
-    exit 1
+    guardado=$(head -n 1 -- "${ARCHIVOS_CHUMO[0]}") || {
+        printf '\n%b\n' "${rojo}No se pudo verificar el archivo.${reset}"
+        pausa
+        exit 1
+    }
+
+    if [[ "$guardado" != "$final" ]]; then
+        printf '\n%b\n' "${rojo}${negrita}ERROR:${reset} El contenido guardado no coincide."
+        pausa
+        exit 1
+    fi
+
+else
+    if ! guardado=$(cat -- "$ARCHIVO"); then
+        printf '\n%b\n' "${rojo}No se pudo verificar el archivo.${reset}"
+        pausa
+        exit 1
+    fi
+
+    if [[ "$guardado" != "$final" ]]; then
+        printf '\n%b\n' "${rojo}${negrita}ERROR:${reset} El contenido guardado no coincide."
+        pausa
+        exit 1
+    fi
 fi
 
 # ── Resultado final ──────────────────────────────────────────
@@ -339,7 +511,17 @@ printf '%b\n' "  ${verde}${negrita}✔ Nuevo nombre:${reset}"
 printf '\n'
 printf '  %b\n' "${amarillo}${negrita}${final}${reset}"
 printf '\n'
-printf '  %b\n' "${verde}✔ Guardado en:${reset} ${blanco}${ARCHIVO}${reset}"
+
+if ((ES_CHUMO == 1)); then
+    printf '%b\n' "  ${verde}✔ Guardado en:${reset}"
+
+    for archivo in "${ARCHIVOS_CHUMO[@]}"; do
+        printf '  %b\n' "${blanco}${archivo}${reset}"
+    done
+else
+    printf '%b\n' "  ${verde}✔ Guardado en:${reset} ${blanco}${ARCHIVO}${reset}"
+fi
+
 printf '\n'
 printf '%b\n' "${gris}${INSTALACION} | Gestor de Reseller${reset}"
 
