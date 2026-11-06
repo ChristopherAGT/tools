@@ -1,34 +1,44 @@
-
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
 
 # ============================================================
-#                 BHTTP AUTO REPAIR
-#                      EPRO DEV
+#                       BHTTP FIX
+#                 AUTOMATIC SERVICE REPAIR
 # ============================================================
 
 SERVICE="bhttp.service"
 BINARY="/bin/BHTTP"
 BACKUP_DIR="/var/backups/bhttp-auto-repair"
 
-CYAN='\033[38;5;51m'
+# ------------------------------------------------------------
+# COLORS
+# ------------------------------------------------------------
+
+NAVY='\033[38;5;24m'
 BLUE='\033[38;5;39m'
+CYAN='\033[38;5;51m'
+STEEL='\033[38;5;75m'
+SILVER='\033[38;5;250m'
+GOLD='\033[38;5;220m'
 GREEN='\033[38;5;82m'
-YELLOW='\033[38;5;220m'
 RED='\033[38;5;196m'
-WHITE='\033[1;37m'
 GRAY='\033[38;5;245m'
+WHITE='\033[1;37m'
 RESET='\033[0m'
 
 info() { printf "${CYAN}●${RESET} %s\n" "$*"; }
 ok()   { printf "${GREEN}✓${RESET} %s\n" "$*"; }
-warn() { printf "${YELLOW}!${RESET} %s\n" "$*"; }
+warn() { printf "${GOLD}!${RESET} %s\n" "$*"; }
 err()  { printf "${RED}✗${RESET} %s\n" "$*" >&2; }
 
 TEMP_FILE=""
 CHECK_DIR=""
 BACKUP=""
+
+# ------------------------------------------------------------
+# CLEANUP
+# ------------------------------------------------------------
 
 cleanup() {
     [[ -n "$TEMP_FILE" && -f "$TEMP_FILE" ]] && rm -f "$TEMP_FILE"
@@ -38,17 +48,69 @@ trap cleanup EXIT
 
 clear 2>/dev/null || true
 
+# ------------------------------------------------------------
+# HEADER
+# ------------------------------------------------------------
+
 echo
-printf "${CYAN}             BHTTP AUTO REPAIR${RESET}\n"
-printf "${GRAY}                  EPRO DEV${RESET}\n"
+printf "${BLUE}                    BHTTP${RESET} ${WHITE}FIX${RESET}\n"
+printf "${GRAY}             AUTOMATIC SERVICE REPAIR${RESET}\n"
 echo
+printf "${STEEL}────────────────────────────────────────${RESET}\n"
+echo
+
+# ------------------------------------------------------------
+# SPINNER
+# ------------------------------------------------------------
+
+run_step() {
+    local LABEL="$1"
+    shift
+
+    local LOG
+    local PID
+    local FRAME=0
+    local -a FRAMES=(
+        "● ○ ○ ○ ○ ○"
+        "○ ● ○ ○ ○ ○"
+        "○ ○ ● ○ ○ ○"
+        "○ ○ ○ ● ○ ○"
+        "○ ○ ○ ○ ● ○"
+        "○ ○ ○ ○ ○ ●"
+    )
+
+    LOG=$(mktemp)
+
+    "$@" >"$LOG" 2>&1 &
+    PID=$!
+
+    while kill -0 "$PID" 2>/dev/null; do
+        printf "\r\033[K${BLUE}%s${RESET} ${CYAN}%s${RESET}" \
+            "$LABEL" "${FRAMES[$FRAME]}"
+
+        FRAME=$(( (FRAME + 1) % 6 ))
+        sleep 0.12
+    done
+
+    if wait "$PID"; then
+        printf "\r\033[K${GREEN}✓${RESET} %s\n" "$LABEL"
+        rm -f "$LOG"
+        return 0
+    else
+        printf "\r\033[K${RED}✗${RESET} %s\n" "$LABEL"
+        echo
+        tail -n 8 "$LOG" >&2
+        rm -f "$LOG"
+        return 1
+    fi
+}
 
 # ------------------------------------------------------------
 # DEPENDENCIES
 # ------------------------------------------------------------
 
 if (( EUID != 0 )); then
-    err "Este script requiere permisos root."
+    err "Ejecuta este script como root."
     exit 1
 fi
 
@@ -60,19 +122,19 @@ for CMD in systemctl systemd-analyze awk grep cp ss journalctl; do
 done
 
 if [[ ! -x "$BINARY" ]]; then
-    err "No se encontró el ejecutable $BINARY."
+    err "No se encontró $BINARY."
     exit 1
 fi
 
 if ! systemctl cat "$SERVICE" >/dev/null 2>&1; then
-    err "No se pudo identificar $SERVICE."
+    err "No se encontró el servicio $SERVICE."
     exit 1
 fi
 
 UNIT=$(systemctl show "$SERVICE" -p FragmentPath --value)
 
 if [[ -z "$UNIT" || ! -f "$UNIT" ]]; then
-    err "No se encontró el archivo principal de la unidad."
+    err "No se encontró el archivo de configuración."
     exit 1
 fi
 
@@ -83,9 +145,9 @@ fi
 DROPINS=$(systemctl show "$SERVICE" -p DropInPaths --value)
 
 if [[ -n "$DROPINS" ]]; then
-    err "Se detectaron archivos drop-in que pueden sobrescribir ExecStart."
+    err "La unidad tiene configuraciones adicionales (drop-ins)."
     printf '%s\n' "$DROPINS"
-    warn "No se modificó ningún archivo."
+    warn "No se realizaron modificaciones."
     exit 1
 fi
 
@@ -96,17 +158,16 @@ fi
 EXEC_COUNT=$(grep -Ec '^[[:space:]]*ExecStart[[:space:]]*=' "$UNIT" || true)
 
 if [[ "$EXEC_COUNT" != "1" ]]; then
-    err "Se esperaba exactamente una línea ExecStart; encontradas: $EXEC_COUNT."
+    err "ExecStart debe aparecer exactamente una vez."
     exit 1
 fi
 
 EXEC_LINE=$(grep -E '^[[:space:]]*ExecStart[[:space:]]*=' "$UNIT")
 
-# Se rechaza sintaxis compleja para no interpretar incorrectamente
-# comillas, escapes o expansiones propias de systemd.
+# No interpretar incorrectamente sintaxis compleja de systemd.
 if [[ "$EXEC_LINE" == *'"'* || "$EXEC_LINE" == *"'"* || "$EXEC_LINE" == *'\'* ]]; then
     err "ExecStart contiene comillas o escapes especiales."
-    warn "Se requiere revisar su sintaxis antes de modificarlo."
+    warn "Se necesita revisar la unidad manualmente."
     exit 1
 fi
 
@@ -125,7 +186,7 @@ if (( ${#ARGS[@]} == 0 )); then
 fi
 
 # ------------------------------------------------------------
-# PARSE ARGUMENTS
+# PARSE PARAMETERS
 # ------------------------------------------------------------
 
 LISTEN=""
@@ -146,9 +207,9 @@ while (( i < ${#ARGS[@]} )); do
 
     case "$ARG" in
 
-        "$BINARY"|/usr/bin/BHTTP|BHTTP)
+        "$BINARY"|/usr/bin/BHTTP|/usr/local/bin/BHTTP|BHTTP)
             if (( i != 0 )); then
-                err "Ejecutable adicional detectado en ExecStart."
+                err "Ejecutable adicional detectado."
                 exit 1
             fi
             ;;
@@ -161,20 +222,20 @@ while (( i < ${#ARGS[@]} )); do
                 exit 1
             fi
 
-            if (( SEEN_PORT == 1 )); then
-                err "El puerto antiguo está duplicado."
+            (( SEEN_PORT == 0 )) || {
+                err "Puerto antiguo duplicado."
                 exit 1
-            fi
+            }
 
             OLD_PORT="${ARGS[$i]}"
             SEEN_PORT=1
             ;;
 
         --port=*|-port=*)
-            if (( SEEN_PORT == 1 )); then
-                err "El puerto antiguo está duplicado."
+            (( SEEN_PORT == 0 )) || {
+                err "Puerto antiguo duplicado."
                 exit 1
-            fi
+            }
 
             OLD_PORT="${ARG#*=}"
             SEEN_PORT=1
@@ -188,20 +249,20 @@ while (( i < ${#ARGS[@]} )); do
                 exit 1
             fi
 
-            if (( SEEN_SSH == 1 )); then
-                err "La redirección SSH antigua está duplicada."
+            (( SEEN_SSH == 0 )) || {
+                err "Redirección SSH duplicada."
                 exit 1
-            fi
+            }
 
             OLD_SSH="${ARGS[$i]}"
             SEEN_SSH=1
             ;;
 
         --ssh=*|-ssh=*)
-            if (( SEEN_SSH == 1 )); then
-                err "La redirección SSH antigua está duplicada."
+            (( SEEN_SSH == 0 )) || {
+                err "Redirección SSH duplicada."
                 exit 1
-            fi
+            }
 
             OLD_SSH="${ARG#*=}"
             SEEN_SSH=1
@@ -215,20 +276,20 @@ while (( i < ${#ARGS[@]} )); do
                 exit 1
             fi
 
-            if (( SEEN_LISTEN == 1 )); then
-                err "El parámetro -listen está duplicado."
+            (( SEEN_LISTEN == 0 )) || {
+                err "Parámetro -listen duplicado."
                 exit 1
-            fi
+            }
 
             LISTEN="${ARGS[$i]}"
             SEEN_LISTEN=1
             ;;
 
         -listen=*|--listen=*)
-            if (( SEEN_LISTEN == 1 )); then
-                err "El parámetro -listen está duplicado."
+            (( SEEN_LISTEN == 0 )) || {
+                err "Parámetro -listen duplicado."
                 exit 1
-            fi
+            }
 
             LISTEN="${ARG#*=}"
             SEEN_LISTEN=1
@@ -242,20 +303,20 @@ while (( i < ${#ARGS[@]} )); do
                 exit 1
             fi
 
-            if (( SEEN_TARGET == 1 )); then
-                err "El parámetro -target está duplicado."
+            (( SEEN_TARGET == 0 )) || {
+                err "Parámetro -target duplicado."
                 exit 1
-            fi
+            }
 
             TARGET="${ARGS[$i]}"
             SEEN_TARGET=1
             ;;
 
         -target=*|--target=*)
-            if (( SEEN_TARGET == 1 )); then
-                err "El parámetro -target está duplicado."
+            (( SEEN_TARGET == 0 )) || {
+                err "Parámetro -target duplicado."
                 exit 1
-            fi
+            }
 
             TARGET="${ARG#*=}"
             SEEN_TARGET=1
@@ -265,7 +326,7 @@ while (( i < ${#ARGS[@]} )); do
             i=$((i + 1))
 
             if (( i >= ${#ARGS[@]} )); then
-                err "Falta el valor del parámetro $ARG."
+                err "Falta el valor de $ARG."
                 exit 1
             fi
 
@@ -277,13 +338,13 @@ while (( i < ${#ARGS[@]} )); do
             ;;
 
         -*)
-            err "Parámetro no reconocido: $ARG"
-            warn "No se modificó el servicio para evitar perder opciones."
+            err "Parámetro no compatible: $ARG"
+            warn "No se modificó el servicio."
             exit 1
             ;;
 
         *)
-            err "Argumento inesperado en ExecStart: $ARG"
+            err "Argumento inesperado: $ARG"
             exit 1
             ;;
     esac
@@ -296,7 +357,7 @@ done
 # ------------------------------------------------------------
 
 if (( SEEN_LISTEN == 1 && SEEN_PORT == 1 )); then
-    err "Se encontraron simultáneamente -listen y --port."
+    err "Se detectaron dos configuraciones de escucha."
     exit 1
 fi
 
@@ -304,7 +365,6 @@ if [[ -z "$LISTEN" ]]; then
     if [[ -n "$OLD_PORT" ]]; then
         LISTEN="0.0.0.0:$OLD_PORT"
     else
-        # Listener explícito para evitar el puerto 53 predeterminado.
         LISTEN="0.0.0.0:80"
     fi
 fi
@@ -314,7 +374,7 @@ fi
 # ------------------------------------------------------------
 
 if (( SEEN_TARGET == 1 && SEEN_SSH == 1 )); then
-    err "Se encontraron simultáneamente -target y --ssh."
+    err "Se detectaron dos configuraciones de redirección."
     exit 1
 fi
 
@@ -327,7 +387,7 @@ if [[ -z "$TARGET" ]]; then
 fi
 
 # ------------------------------------------------------------
-# VALIDATE PORT
+# PORT VALIDATION
 # ------------------------------------------------------------
 
 valid_port() {
@@ -338,23 +398,23 @@ valid_port() {
 }
 
 if [[ -n "$OLD_PORT" ]] && ! valid_port "$OLD_PORT"; then
-    err "Puerto antiguo inválido: $OLD_PORT"
+    err "Puerto de escucha antiguo inválido."
     exit 1
 fi
 
 if [[ -n "$OLD_SSH" ]] && ! valid_port "$OLD_SSH"; then
-    err "Puerto SSH antiguo inválido: $OLD_SSH"
+    err "Puerto SSH antiguo inválido."
     exit 1
 fi
 
 # ------------------------------------------------------------
-# VALIDATE TARGET
+# TARGET VALIDATION
 # ------------------------------------------------------------
 
 if [[ "$TARGET" =~ ^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+):([0-9]{1,5})$ ]]; then
     TARGET_PORT="${BASH_REMATCH[2]}"
 else
-    err "Formato de destino inválido: $TARGET"
+    err "Formato de redirección inválido: $TARGET"
     exit 1
 fi
 
@@ -364,16 +424,16 @@ if ! valid_port "$TARGET_PORT"; then
 fi
 
 # ------------------------------------------------------------
-# VALIDATE LISTENERS
+# LISTENER VALIDATION
 # ------------------------------------------------------------
 
 if [[ -z "$LISTEN" || "$LISTEN" == *[[:space:]]* ]]; then
-    err "Formato de escucha inválido: $LISTEN"
+    err "Formato de escucha inválido."
     exit 1
 fi
 
 if [[ "$LISTEN" == ,* || "$LISTEN" == *, || "$LISTEN" == *,,* ]]; then
-    err "La lista de listeners contiene separadores vacíos."
+    err "Lista de listeners inválida."
     exit 1
 fi
 
@@ -386,45 +446,41 @@ fi
 
 for LISTENER in "${LISTENERS[@]}"; do
 
-    if [[ "$LISTENER" =~ ^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]*):([0-9]{1,5})$ ]]; then
+    if [[ "$LISTENER" =~ ^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._*-]*):([0-9]{1,5})$ ]]; then
         PORT="${BASH_REMATCH[2]}"
     else
-        err "Listener inválido: $LISTENER"
+        err "Formato de listener inválido: $LISTENER"
         exit 1
     fi
 
     if ! valid_port "$PORT"; then
-        err "Puerto de escucha fuera de rango: $PORT"
+        err "Puerto de escucha fuera de rango."
         exit 1
     fi
 
 done
 
 # ------------------------------------------------------------
-# VALIDATE EXTRA ARGUMENTS
+# VALIDATE EXTRA PARAMETERS
 # ------------------------------------------------------------
 
 for ARG in "${EXTRA[@]}"; do
     if [[ ! "$ARG" =~ ^[-A-Za-z0-9_./:+,@=-]+$ ]]; then
-        err "Argumento adicional contiene caracteres no admitidos: $ARG"
+        err "Parámetro adicional contiene caracteres no admitidos."
         exit 1
     fi
 done
 
 # ------------------------------------------------------------
-# DISPLAY CONFIGURATION
+# CONFIGURATION SUMMARY
 # ------------------------------------------------------------
 
 echo
-printf "${WHITE}CONFIGURACIÓN DETECTADA${RESET}\n\n"
-
-printf "  Servicio:             ${CYAN}%s${RESET}\n" "$SERVICE"
-printf "  Ejecutable:           ${CYAN}%s${RESET}\n" "$BINARY"
-printf "  Escucha:              ${CYAN}%s${RESET}\n" "$LISTEN"
-printf "  Redirección SSH:      ${CYAN}%s${RESET}\n" "$TARGET"
-printf "  Listeners:            ${CYAN}%s${RESET}\n" "${#LISTENERS[@]}"
-
+printf "${SILVER}CONFIGURACIÓN${RESET}\n"
 echo
+
+printf "  ${GRAY}Escucha${RESET}       ${CYAN}%s${RESET}\n" "$LISTEN"
+printf "  ${GRAY}Redirección${RESET}   ${CYAN}%s${RESET}\n" "$TARGET"
 
 # ------------------------------------------------------------
 # BUILD EXECSTART
@@ -447,7 +503,7 @@ for ARG in "${NEW_ARGS[@]}"; do
 done
 
 # ------------------------------------------------------------
-# CREATE BACKUP
+# BACKUP
 # ------------------------------------------------------------
 
 mkdir -p "$BACKUP_DIR"
@@ -459,10 +515,8 @@ if ! cp -a "$UNIT" "$BACKUP"; then
     exit 1
 fi
 
-ok "Respaldo original creado."
-
 # ------------------------------------------------------------
-# PREPARE TEMPORARY UNIT
+# PREPARE UNIT
 # ------------------------------------------------------------
 
 TEMP_FILE=$(mktemp "${UNIT}.XXXXXX")
@@ -474,7 +528,7 @@ if ! awk -v replacement="$NEW_EXEC" '
     }
     { print }
 ' "$UNIT" > "$TEMP_FILE"; then
-    err "No se pudo generar la unidad temporal."
+    err "No se pudo preparar la configuración."
     exit 1
 fi
 
@@ -482,15 +536,16 @@ chown --reference="$UNIT" "$TEMP_FILE"
 chmod --reference="$UNIT" "$TEMP_FILE"
 
 # ------------------------------------------------------------
-# VALIDATE SYSTEMD UNIT
+# SYSTEMD VALIDATION
 # ------------------------------------------------------------
 
 CHECK_DIR=$(mktemp -d)
 
-cp "$TEMP_FILE" "$CHECK_DIR/bhttp.service"
+cp "$TEMP_FILE" "$CHECK_DIR/$SERVICE"
 
-if ! systemd-analyze verify "$CHECK_DIR/bhttp.service"; then
-    err "Systemd rechazó la configuración."
+if ! run_step "Validando configuración" \
+    systemd-analyze verify "$CHECK_DIR/$SERVICE"; then
+    err "La configuración no superó la validación."
     exit 1
 fi
 
@@ -498,23 +553,21 @@ fi
 # APPLY REPAIR
 # ------------------------------------------------------------
 
-info "Aplicando reparación..."
-
-if ! systemctl stop "$SERVICE"; then
+if ! run_step "Deteniendo servicio" systemctl stop "$SERVICE"; then
     err "No se pudo detener el servicio."
     exit 1
 fi
 
 if ! mv -f "$TEMP_FILE" "$UNIT"; then
-    err "No se pudo instalar la nueva configuración."
+    err "No se pudo instalar la configuración."
     systemctl start "$SERVICE" || true
     exit 1
 fi
 
 TEMP_FILE=""
 
-if ! systemctl daemon-reload; then
-    err "No se pudo recargar systemd. Restaurando respaldo."
+if ! run_step "Recargando systemd" systemctl daemon-reload; then
+    err "Falló la recarga. Restaurando configuración original."
 
     cp -a "$BACKUP" "$UNIT"
     systemctl daemon-reload || true
@@ -522,66 +575,49 @@ if ! systemctl daemon-reload; then
     exit 1
 fi
 
-systemctl reset-failed "$SERVICE" || true
+systemctl reset-failed "$SERVICE" >/dev/null 2>&1 || true
 
 # ------------------------------------------------------------
-# RESTART
+# RESTART SERVICE
 # ------------------------------------------------------------
 
-info "Reiniciando BHTTP..."
-
-if ! systemctl restart "$SERVICE"; then
-
-    err "BHTTP no pudo reiniciarse."
-
+if ! run_step "Iniciando BHTTP" systemctl restart "$SERVICE"; then
+    err "No fue posible iniciar BHTTP."
     echo
-    journalctl -u "$SERVICE" -n 30 --no-pager
-
+    journalctl -u "$SERVICE" -n 8 --no-pager
     echo
-    warn "La configuración reparada se conserva."
-    warn "Respaldo original: $BACKUP"
-
+    warn "Respaldo disponible: $BACKUP"
     exit 1
 fi
 
 sleep 2
 
 # ------------------------------------------------------------
-# FINAL VERIFICATION
+# FINAL STATUS
 # ------------------------------------------------------------
 
-echo
-
-if systemctl is-active --quiet "$SERVICE"; then
-
-    ok "BHTTP está activo."
-
-    echo
-    printf "${WHITE}ESTADO DEL SERVICIO${RESET}\n\n"
-    systemctl status "$SERVICE" --no-pager -l
-
-    echo
-    printf "${WHITE}PUERTOS TCP EN ESCUCHA${RESET}\n\n"
-    ss -lntp
-
-    echo
-    ok "Reparación completada."
-    info "Respaldo: $BACKUP"
-
-else
-
+if ! systemctl is-active --quiet "$SERVICE"; then
     err "BHTTP no consiguió mantenerse activo."
-
-    echo
-    journalctl -u "$SERVICE" -n 30 --no-pager
-
-    echo
-    warn "La configuración reparada se conserva."
-    warn "Respaldo original: $BACKUP"
-
+    journalctl -u "$SERVICE" -n 8 --no-pager
+    warn "Respaldo disponible: $BACKUP"
     exit 1
 fi
 
+# ------------------------------------------------------------
+# SUCCESS
+# ------------------------------------------------------------
+
 echo
-printf "${GRAY}SCRIPT BY. ChristopherAGT${RESET}\n"
+printf "${STEEL}────────────────────────────────────────${RESET}\n"
+echo
+
+printf "${GREEN}       ✓ BHTTP REPARADO CORRECTAMENTE${RESET}\n"
+echo
+
+printf "  ${GRAY}Estado${RESET}        ${GREEN}ACTIVO${RESET}\n"
+printf "  ${GRAY}Escucha${RESET}       ${CYAN}%s${RESET}\n" "$LISTEN"
+printf "  ${GRAY}Redirección${RESET}   ${CYAN}%s${RESET}\n" "$TARGET"
+
+echo
+printf "${GRAY}  Respaldo: %s${RESET}\n" "$BACKUP"
 echo
