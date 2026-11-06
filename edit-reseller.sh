@@ -156,7 +156,7 @@ cerrar_panel() {
 
 pausa() {
     echo
-    read -r -p "Presiona ENTER para salir..." _
+    read -r _
 }
 
 # ── Detectar instalación y archivo de reseller ───────────────
