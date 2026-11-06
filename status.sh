@@ -52,7 +52,7 @@ if (( EUID != 0 )); then
     exit 1
 fi
 
-for CMD in systemctl systemd-analyze python3 awk grep cp ss journalctl; do
+for CMD in systemctl systemd-analyze awk grep cp ss journalctl; do
     if ! command -v "$CMD" >/dev/null 2>&1; then
         err "Dependencia no encontrada: $CMD"
         exit 1
@@ -76,7 +76,10 @@ if [[ -z "$UNIT" || ! -f "$UNIT" ]]; then
     exit 1
 fi
 
-# Evitar modificar una unidad cuyo ExecStart esté sobrescrito.
+# ------------------------------------------------------------
+# CHECK DROP-INS
+# ------------------------------------------------------------
+
 DROPINS=$(systemctl show "$SERVICE" -p DropInPaths --value)
 
 if [[ -n "$DROPINS" ]]; then
@@ -99,8 +102,8 @@ fi
 
 EXEC_LINE=$(grep -E '^[[:space:]]*ExecStart[[:space:]]*=' "$UNIT")
 
-# Este reparador admite argumentos sencillos sin comillas ni escapes.
-# Si encuentra sintaxis compleja, se detiene para evitar interpretarla mal.
+# Se rechaza sintaxis compleja para no interpretar incorrectamente
+# comillas, escapes o expansiones propias de systemd.
 if [[ "$EXEC_LINE" == *'"'* || "$EXEC_LINE" == *"'"* || "$EXEC_LINE" == *'\'* ]]; then
     err "ExecStart contiene comillas o escapes especiales."
     warn "Se requiere revisar su sintaxis antes de modificarlo."
@@ -140,9 +143,9 @@ i=0
 while (( i < ${#ARGS[@]} )); do
 
     ARG="${ARGS[$i]}"
-    VALUE=""
 
     case "$ARG" in
+
         "$BINARY"|/usr/bin/BHTTP|BHTTP)
             if (( i != 0 )); then
                 err "Ejecutable adicional detectado en ExecStart."
@@ -151,103 +154,121 @@ while (( i < ${#ARGS[@]} )); do
             ;;
 
         --port|-port)
-            ((i+=1))
+            i=$((i + 1))
+
             if (( i >= ${#ARGS[@]} )); then
-                err "Falta el valor de $ARG."
+                err "Falta el valor de --port."
                 exit 1
             fi
-            (( SEEN_PORT == 0 )) || {
+
+            if (( SEEN_PORT == 1 )); then
                 err "El puerto antiguo está duplicado."
                 exit 1
-            }
+            fi
+
             OLD_PORT="${ARGS[$i]}"
             SEEN_PORT=1
             ;;
 
         --port=*|-port=*)
-            (( SEEN_PORT == 0 )) || {
+            if (( SEEN_PORT == 1 )); then
                 err "El puerto antiguo está duplicado."
                 exit 1
-            }
+            fi
+
             OLD_PORT="${ARG#*=}"
             SEEN_PORT=1
             ;;
 
         --ssh|-ssh)
-            ((i+=1))
+            i=$((i + 1))
+
             if (( i >= ${#ARGS[@]} )); then
-                err "Falta el valor de $ARG."
+                err "Falta el valor de --ssh."
                 exit 1
             fi
-            (( SEEN_SSH == 0 )) || {
+
+            if (( SEEN_SSH == 1 )); then
                 err "La redirección SSH antigua está duplicada."
                 exit 1
-            }
+            fi
+
             OLD_SSH="${ARGS[$i]}"
             SEEN_SSH=1
             ;;
 
         --ssh=*|-ssh=*)
-            (( SEEN_SSH == 0 )) || {
+            if (( SEEN_SSH == 1 )); then
                 err "La redirección SSH antigua está duplicada."
                 exit 1
-            }
+            fi
+
             OLD_SSH="${ARG#*=}"
             SEEN_SSH=1
             ;;
 
         -listen|--listen)
-            ((i+=1))
+            i=$((i + 1))
+
             if (( i >= ${#ARGS[@]} )); then
                 err "Falta el valor de -listen."
                 exit 1
             fi
-            (( SEEN_LISTEN == 0 )) || {
+
+            if (( SEEN_LISTEN == 1 )); then
                 err "El parámetro -listen está duplicado."
                 exit 1
-            }
+            fi
+
             LISTEN="${ARGS[$i]}"
             SEEN_LISTEN=1
             ;;
 
         -listen=*|--listen=*)
-            (( SEEN_LISTEN == 0 )) || {
+            if (( SEEN_LISTEN == 1 )); then
                 err "El parámetro -listen está duplicado."
                 exit 1
-            }
+            fi
+
             LISTEN="${ARG#*=}"
             SEEN_LISTEN=1
             ;;
 
         -target|--target)
-            ((i+=1))
+            i=$((i + 1))
+
             if (( i >= ${#ARGS[@]} )); then
                 err "Falta el valor de -target."
                 exit 1
             fi
-            (( SEEN_TARGET == 0 )) || {
+
+            if (( SEEN_TARGET == 1 )); then
                 err "El parámetro -target está duplicado."
                 exit 1
-            }
+            fi
+
             TARGET="${ARGS[$i]}"
             SEEN_TARGET=1
             ;;
 
         -target=*|--target=*)
-            (( SEEN_TARGET == 0 )) || {
+            if (( SEEN_TARGET == 1 )); then
                 err "El parámetro -target está duplicado."
                 exit 1
-            }
+            fi
+
             TARGET="${ARG#*=}"
             SEEN_TARGET=1
             ;;
 
         -bhttp-v2-max-lanes|-session-timeout|-tls-cert|-tls-key|-xhttp-listen)
-            ((i+=1))
+            i=$((i + 1))
+
             if (( i >= ${#ARGS[@]} )); then
                 err "Falta el valor del parámetro $ARG."
                 exit 1
             fi
+
             EXTRA+=("$ARG" "${ARGS[$i]}")
             ;;
 
@@ -256,7 +277,7 @@ while (( i < ${#ARGS[@]} )); do
             ;;
 
         -*)
-            err "Parámetro no reconocido por el reparador: $ARG"
+            err "Parámetro no reconocido: $ARG"
             warn "No se modificó el servicio para evitar perder opciones."
             exit 1
             ;;
@@ -267,7 +288,7 @@ while (( i < ${#ARGS[@]} )); do
             ;;
     esac
 
-    ((i+=1))
+    i=$((i + 1))
 done
 
 # ------------------------------------------------------------
@@ -276,7 +297,6 @@ done
 
 if (( SEEN_LISTEN == 1 && SEEN_PORT == 1 )); then
     err "Se encontraron simultáneamente -listen y --port."
-    warn "No es posible determinar cuál configuración debe prevalecer."
     exit 1
 fi
 
@@ -284,10 +304,18 @@ if [[ -z "$LISTEN" ]]; then
     if [[ -n "$OLD_PORT" ]]; then
         LISTEN="0.0.0.0:$OLD_PORT"
     else
-        # Evita el listener TCP 53 predeterminado, que puede
-        # entrar en conflicto con systemd-resolved.
+        # Listener explícito para evitar el puerto 53 predeterminado.
         LISTEN="0.0.0.0:80"
     fi
+fi
+
+# ------------------------------------------------------------
+# NORMALIZE TARGET
+# ------------------------------------------------------------
+
+if (( SEEN_TARGET == 1 && SEEN_SSH == 1 )); then
+    err "Se encontraron simultáneamente -target y --ssh."
+    exit 1
 fi
 
 if [[ -z "$TARGET" ]]; then
@@ -323,12 +351,12 @@ fi
 # VALIDATE TARGET
 # ------------------------------------------------------------
 
-if [[ ! "$TARGET" =~ ^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+):([0-9]{1,5})$ ]]; then
+if [[ "$TARGET" =~ ^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+):([0-9]{1,5})$ ]]; then
+    TARGET_PORT="${BASH_REMATCH[2]}"
+else
     err "Formato de destino inválido: $TARGET"
     exit 1
 fi
-
-TARGET_PORT="${BASH_REMATCH[2]}"
 
 if ! valid_port "$TARGET_PORT"; then
     err "Puerto de redirección fuera de rango."
@@ -344,6 +372,11 @@ if [[ -z "$LISTEN" || "$LISTEN" == *[[:space:]]* ]]; then
     exit 1
 fi
 
+if [[ "$LISTEN" == ,* || "$LISTEN" == *, || "$LISTEN" == *,,* ]]; then
+    err "La lista de listeners contiene separadores vacíos."
+    exit 1
+fi
+
 IFS=',' read -r -a LISTENERS <<< "$LISTEN"
 
 if (( ${#LISTENERS[@]} == 0 )); then
@@ -353,29 +386,26 @@ fi
 
 for LISTENER in "${LISTENERS[@]}"; do
 
-    if [[ ! "$LISTENER" =~ ^( \[[0-9A-Fa-f:.]+\] | [A-Za-z0-9._*-]* ) : ([0-9]{1,5})$ ]]; then
-        # Segunda comprobación sin espacios en la expresión.
-        if [[ ! "$LISTENER" =~ ^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._*-]*):([0-9]{1,5})$ ]]; then
-            err "Listener inválido: $LISTENER"
-            exit 1
-        fi
+    if [[ "$LISTENER" =~ ^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]*):([0-9]{1,5})$ ]]; then
         PORT="${BASH_REMATCH[2]}"
     else
-        PORT="${BASH_REMATCH[2]}"
+        err "Listener inválido: $LISTENER"
+        exit 1
     fi
 
     if ! valid_port "$PORT"; then
         err "Puerto de escucha fuera de rango: $PORT"
         exit 1
     fi
+
 done
 
 # ------------------------------------------------------------
-# VALIDATE EXTRA VALUES
+# VALIDATE EXTRA ARGUMENTS
 # ------------------------------------------------------------
 
 for ARG in "${EXTRA[@]}"; do
-    if [[ ! "$ARG" =~ ^[-A-Za-z0-9_./:+,@=%]+$ ]]; then
+    if [[ ! "$ARG" =~ ^[-A-Za-z0-9_./:+,@=-]+$ ]]; then
         err "Argumento adicional contiene caracteres no admitidos: $ARG"
         exit 1
     fi
@@ -410,8 +440,6 @@ NEW_ARGS=(
 
 NEW_ARGS+=("${EXTRA[@]}")
 
-# Los argumentos ya fueron restringidos a caracteres seguros
-# para evitar expansiones o interpretaciones inesperadas.
 NEW_EXEC=""
 
 for ARG in "${NEW_ARGS[@]}"; do
@@ -426,7 +454,10 @@ mkdir -p "$BACKUP_DIR"
 
 BACKUP="$BACKUP_DIR/bhttp-$(date +%Y%m%d-%H%M%S)-$$.service"
 
-cp -a "$UNIT" "$BACKUP"
+if ! cp -a "$UNIT" "$BACKUP"; then
+    err "No se pudo crear el respaldo."
+    exit 1
+fi
 
 ok "Respaldo original creado."
 
@@ -436,22 +467,26 @@ ok "Respaldo original creado."
 
 TEMP_FILE=$(mktemp "${UNIT}.XXXXXX")
 
-awk -v replacement="$NEW_EXEC" '
+if ! awk -v replacement="$NEW_EXEC" '
     /^[[:space:]]*ExecStart[[:space:]]*=/ {
         print "ExecStart=" replacement
         next
     }
     { print }
-' "$UNIT" > "$TEMP_FILE"
+' "$UNIT" > "$TEMP_FILE"; then
+    err "No se pudo generar la unidad temporal."
+    exit 1
+fi
 
 chown --reference="$UNIT" "$TEMP_FILE"
 chmod --reference="$UNIT" "$TEMP_FILE"
 
 # ------------------------------------------------------------
-# VALIDATE TEMPORARY UNIT
+# VALIDATE SYSTEMD UNIT
 # ------------------------------------------------------------
 
 CHECK_DIR=$(mktemp -d)
+
 cp "$TEMP_FILE" "$CHECK_DIR/bhttp.service"
 
 if ! systemd-analyze verify "$CHECK_DIR/bhttp.service"; then
@@ -472,12 +507,21 @@ fi
 
 if ! mv -f "$TEMP_FILE" "$UNIT"; then
     err "No se pudo instalar la nueva configuración."
+    systemctl start "$SERVICE" || true
     exit 1
 fi
 
 TEMP_FILE=""
 
-systemctl daemon-reload
+if ! systemctl daemon-reload; then
+    err "No se pudo recargar systemd. Restaurando respaldo."
+
+    cp -a "$BACKUP" "$UNIT"
+    systemctl daemon-reload || true
+    systemctl start "$SERVICE" || true
+    exit 1
+fi
+
 systemctl reset-failed "$SERVICE" || true
 
 # ------------------------------------------------------------
@@ -487,12 +531,16 @@ systemctl reset-failed "$SERVICE" || true
 info "Reiniciando BHTTP..."
 
 if ! systemctl restart "$SERVICE"; then
+
     err "BHTTP no pudo reiniciarse."
+
     echo
     journalctl -u "$SERVICE" -n 30 --no-pager
+
     echo
     warn "La configuración reparada se conserva."
     warn "Respaldo original: $BACKUP"
+
     exit 1
 fi
 
