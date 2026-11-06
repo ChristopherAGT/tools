@@ -4,942 +4,481 @@ set -Eeuo pipefail
 umask 077
 
 # ============================================================
-#              EPRO DEV SYSTEM AUDIT
-#          ADVANCED LINUX PERFORMANCE DIAGNOSTIC
-# ============================================================
-#
-# AUDITORIA INTEGRAL:
-#   - Sistema operativo y kernel
-#   - CPU, RAM, SWAP y almacenamiento
-#   - Todos los parametros SYSCTL
-#   - Optimizacion TCP/IP
-#   - BBR, CUBIC, FQ y algoritmos disponibles
-#   - Netfilter, Conntrack y Firewall
-#   - Interfaces, MTU y offloading
-#   - Socket, backlog y retransmisiones
-#   - Limites del sistema y procesos
-#   - Systemd y servicios
-#   - Configuraciones persistentes
-#   - Seguridad y diagnostico de rendimiento
-#
-# IMPORTANTE:
-#   SCRIPT DE SOLO LECTURA.
-#   NO MODIFICA NINGUNA CONFIGURACION.
-#
+#                 BHTTP AUTO REPAIR
+#                      EPRO DEV
 # ============================================================
 
-export LC_ALL=C
-export SYSTEMD_PAGER=cat
-export PAGER=cat
+SERVICE="bhttp.service"
+UNIT="/etc/systemd/system/$SERVICE"
+BINARY="/bin/BHTTP"
+BACKUP_DIR="/var/backups/bhttp-auto-repair"
 
-VERSION="1.0.0"
-TITLE="EPRO DEV SYSTEM AUDIT"
-
-CYAN='\033[1;36m'
-BLUE='\033[1;34m'
-GREEN='\033[1;32m'
-YELLOW='\033[1;33m'
-RED='\033[1;31m'
+CYAN='\033[38;5;51m'
+BLUE='\033[38;5;39m'
+GREEN='\033[38;5;82m'
+YELLOW='\033[38;5;220m'
+RED='\033[38;5;196m'
 WHITE='\033[1;37m'
-GRAY='\033[0;37m'
+GRAY='\033[38;5;245m'
 RESET='\033[0m'
 
-if [[ ! -t 1 ]]; then
-    CYAN='' BLUE='' GREEN='' YELLOW=''
-    RED='' WHITE='' GRAY='' RESET=''
+info() { echo -e "${CYAN}●${RESET} $*"; }
+ok()   { echo -e "${GREEN}✓${RESET} $*"; }
+warn() { echo -e "${YELLOW}!${RESET} $*"; }
+err()  { echo -e "${RED}✗${RESET} $*" >&2; }
+
+TEMP_FILE=""
+BACKUP=""
+REPAIRED=0
+
+cleanup() {
+    [[ -n "$TEMP_FILE" && -f "$TEMP_FILE" ]] && rm -f "$TEMP_FILE"
+}
+trap cleanup EXIT
+
+clear 2>/dev/null || true
+
+echo
+echo -e "${CYAN}             BHTTP AUTO REPAIR${RESET}"
+echo -e "${GRAY}                  EPRO DEV${RESET}"
+echo
+
+# ------------------------------------------------------------
+# VALIDATIONS
+# ------------------------------------------------------------
+
+if (( EUID != 0 )); then
+    err "Este script requiere permisos root."
+    exit 1
 fi
 
-line() {
-    printf '%b\n' "${GRAY}────────────────────────────────────────────────────────────${RESET}"
-}
-
-header() {
-    clear 2>/dev/null || true
-    printf '\n'
-    printf '%b\n' "${CYAN}              EPRO DEV SYSTEM AUDIT${RESET}"
-    printf '%b\n' "${WHITE}          ADVANCED PERFORMANCE ANALYSIS${RESET}"
-    printf '%b\n' "${GRAY}                    VERSION ${VERSION}${RESET}"
-    line
-    printf '\n'
-}
-
-section() {
-    printf '\n'
-    printf '%b\n' "${BLUE}◆  $1${RESET}"
-    line
-}
-
-ok() {
-    printf '  %b %s\n' "${GREEN}✓${RESET}" "$1"
-}
-
-warn() {
-    printf '  %b %s\n' "${YELLOW}!${RESET}" "$1"
-}
-
-bad() {
-    printf '  %b %s\n' "${RED}✗${RESET}" "$1"
-}
-
-info() {
-    printf '  %b %s\n' "${CYAN}●${RESET}" "$1"
-}
-
-cmd() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-value() {
-    local label="$1"
-    local result="$2"
-    printf '  %-34s %s\n' "$label" "${result:-N/D}"
-}
-
-read_file() {
-    local file="$1"
-    if [[ -r "$file" ]]; then
-        cat "$file" 2>/dev/null || true
-    else
-        printf 'N/D\n'
+for CMD in systemctl systemd-analyze python3 ss awk grep cp; do
+    if ! command -v "$CMD" >/dev/null 2>&1; then
+        err "Dependencia no encontrada: $CMD"
+        exit 1
     fi
-}
+done
 
-run_section() {
-    local description="$1"
-    shift
-    printf '\n  %s\n' "$description"
-    "$@" 2>/dev/null || true
-}
+if [[ ! -f "$UNIT" ]]; then
+    err "No se encontró el servicio $UNIT"
+    exit 1
+fi
 
-# ============================================================
-# 01. SYSTEM INFORMATION
-# ============================================================
+if [[ ! -x "$BINARY" ]]; then
+    err "No se encontró el ejecutable $BINARY"
+    exit 1
+fi
 
-system_info() {
-    section "01. INFORMACION GENERAL DEL SISTEMA"
+if ! systemctl cat "$SERVICE" >/dev/null 2>&1; then
+    err "No se pudo identificar el servicio."
+    exit 1
+fi
 
-    [[ -r /etc/os-release ]] && {
-        . /etc/os-release
-        value "Distribucion:" "${PRETTY_NAME:-N/D}"
+# ------------------------------------------------------------
+# READ EXECSTART
+# ------------------------------------------------------------
+
+EXEC_LINE=$(awk '
+    /^[[:space:]]*ExecStart[[:space:]]*=/ {
+        sub(/^[[:space:]]*/, "")
+        print
+        exit
     }
+' "$UNIT")
 
-    value "Hostname:" "$(hostname 2>/dev/null)"
-    value "Kernel:" "$(uname -r)"
-    value "Arquitectura:" "$(uname -m)"
-    value "Version kernel:" "$(uname -v)"
-    value "Tiempo encendido:" "$(uptime -p 2>/dev/null)"
-    value "Fecha:" "$(date '+%Y-%m-%d %H:%M:%S %Z')"
-    value "Virtualizacion:" "$(systemd-detect-virt 2>/dev/null || echo N/D)"
-    value "PID 1:" "$(ps -p 1 -o comm= 2>/dev/null)"
-    value "Cantidad de CPU:" "$(nproc 2>/dev/null)"
-    value "Procesos activos:" "$(ps -e --no-headers 2>/dev/null | wc -l)"
+if [[ -z "$EXEC_LINE" ]]; then
+    err "No se encontró ExecStart."
+    exit 1
+fi
 
-    if [[ -r /proc/cmdline ]]; then
-        value "Parametros de arranque:" "$(cat /proc/cmdline)"
-    fi
+# ------------------------------------------------------------
+# PARSE SYSTEMD COMMAND
+# ------------------------------------------------------------
 
-    if cmd lsb_release; then
-        value "Distribucion LSB:" "$(lsb_release -ds 2>/dev/null)"
-    fi
-}
+declare -a ARGS=()
+declare -a EXTRA=()
+declare -a NEW_ARGS=()
 
-# ============================================================
-# 02. CPU
-# ============================================================
+if ! python3 - "$EXEC_LINE" > /tmp/bhttp-args.$$ <<'PY'
+import sys
+import shlex
 
-cpu_info() {
-    section "02. CPU Y PROCESAMIENTO"
+line = sys.argv[1]
+line = line.split("=", 1)[1]
 
-    value "Modelo:" "$(awk -F: '/model name/ {gsub(/^[ \t]+/,"",$2); print $2; exit}' /proc/cpuinfo)"
-    value "Nucleos disponibles:" "$(nproc)"
-    value "Load average:" "$(cat /proc/loadavg)"
-    value "CPU online:" "$(cat /sys/devices/system/cpu/online 2>/dev/null)"
-    value "CPU governor:" "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)"
-    value "Frecuencia actual:" "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null)"
-    value "Frecuencia minima:" "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq 2>/dev/null)"
-    value "Frecuencia maxima:" "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null)"
-    value "CPU idle:" "$(grep '^cpu ' /proc/stat)"
+try:
+    args = shlex.split(line)
+except ValueError as e:
+    print("Error al interpretar ExecStart:", e, file=sys.stderr)
+    sys.exit(1)
 
-    printf '\n  TOP PROCESOS POR CPU\n'
-    ps -eo pid,comm,%cpu,%mem --sort=-%cpu 2>/dev/null | head -11
+for arg in args:
+    sys.stdout.buffer.write(arg.encode() + b"\0")
+PY
+then
+    err "No se pudieron interpretar los argumentos."
+    exit 1
+fi
 
-    printf '\n  INTERRUPCIONES\n'
-    head -12 /proc/interrupts 2>/dev/null || true
+mapfile -d '' -t ARGS < "/tmp/bhttp-args.$$"
+rm -f "/tmp/bhttp-args.$$"
 
-    printf '\n  CONTEXT SWITCHES\n'
-    grep -E 'ctxt|processes|procs_running|procs_blocked' /proc/stat
-}
+if (( ${#ARGS[@]} == 0 )); then
+    err "ExecStart está vacío."
+    exit 1
+fi
 
-# ============================================================
-# 03. MEMORY
-# ============================================================
+# ------------------------------------------------------------
+# DETECT PARAMETERS
+# ------------------------------------------------------------
 
-memory_info() {
-    section "03. MEMORIA RAM Y SWAP"
+LISTEN=""
+TARGET=""
+OLD_PORT=""
+OLD_SSH=""
 
-    free -h
+i=0
 
-    printf '\n  DETALLE DE MEMORIA\n'
-    grep -E '^(MemTotal|MemFree|MemAvailable|Buffers|Cached|SReclaimable|Shmem|SwapTotal|SwapFree|Dirty|Writeback|Slab|PageTables|KernelStack|Unevictable|Mlocked|Committed_AS|CommitLimit):' /proc/meminfo
+while (( i < ${#ARGS[@]} )); do
 
-    printf '\n  SWAPPINESS Y VM\n'
-    for key in \
-        vm.swappiness \
-        vm.vfs_cache_pressure \
-        vm.dirty_ratio \
-        vm.dirty_background_ratio \
-        vm.dirty_bytes \
-        vm.dirty_background_bytes \
-        vm.overcommit_memory \
-        vm.overcommit_ratio \
-        vm.min_free_kbytes \
-        vm.zone_reclaim_mode \
-        vm.page-cluster \
-        vm.max_map_count
-    do
-        sysctl "$key" 2>/dev/null || true
-    done
+    ARG="${ARGS[$i]}"
 
-    printf '\n  PRESION DE MEMORIA (PSI)\n'
-    for f in /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io; do
-        if [[ -r "$f" ]]; then
-            printf '\n  %s\n' "$f"
-            cat "$f"
-        fi
-    done
+    case "$ARG" in
 
-    printf '\n  PROCESOS CON MAYOR CONSUMO RAM\n'
-    ps -eo pid,comm,%mem,rss --sort=-%mem 2>/dev/null | head -11
+        /bin/BHTTP|/usr/bin/BHTTP|BHTTP)
+            ;;
 
-    printf '\n  OOM EVENTS\n'
-    if [[ -r /proc/vmstat ]]; then
-        grep -E '^(oom_kill|pgmajfault|pswpin|pswpout|pgscan|pgsteal)' /proc/vmstat || true
-    fi
-}
+        --port|-port)
+            ((i+=1))
+            OLD_PORT="${ARGS[$i]:-}"
+            ;;
 
-# ============================================================
-# 04. STORAGE AND I/O
-# ============================================================
+        --port=*|-port=*)
+            OLD_PORT="${ARG#*=}"
+            ;;
 
-storage_info() {
-    section "04. ALMACENAMIENTO Y DISCO"
+        --ssh|-ssh)
+            ((i+=1))
+            OLD_SSH="${ARGS[$i]:-}"
+            ;;
 
-    printf '\n  PARTICIONES\n'
-    df -hT
+        --ssh=*|-ssh=*)
+            OLD_SSH="${ARG#*=}"
+            ;;
 
-    printf '\n  DISPOSITIVOS\n'
-    if cmd lsblk; then
-        lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINT,ROTA,SCHED 2>/dev/null || lsblk
-    fi
+        -listen|--listen)
+            ((i+=1))
+            LISTEN="${ARGS[$i]:-}"
+            ;;
 
-    printf '\n  I/O SCHEDULER\n'
-    for f in /sys/block/*/queue/scheduler; do
-        [[ -r "$f" ]] || continue
-        printf '  %-24s %s\n' "$f" "$(cat "$f")"
-    done
+        -listen=*|--listen=*)
+            LISTEN="${ARG#*=}"
+            ;;
 
-    printf '\n  PARAMETROS DE COLA DE DISCO\n'
-    for f in /sys/block/*/queue/{nr_requests,read_ahead_kb,rotational,rq_affinity,nomerges}; do
-        [[ -r "$f" ]] || continue
-        printf '  %-55s %s\n' "$f" "$(cat "$f")"
-    done
+        -target|--target)
+            ((i+=1))
+            TARGET="${ARGS[$i]:-}"
+            ;;
 
-    printf '\n  ESTADISTICAS DE DISCO\n'
-    cat /proc/diskstats 2>/dev/null
+        -target=*|--target=*)
+            TARGET="${ARG#*=}"
+            ;;
 
-    printf '\n  MONTAGENS\n'
-    findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true
+        *)
+            EXTRA+=("$ARG")
+            ;;
 
-    if cmd iostat; then
-        printf '\n  IOSTAT\n'
-        iostat -xz 1 1 2>/dev/null || true
+    esac
+
+    ((i+=1))
+
+done
+
+# ------------------------------------------------------------
+# DETECT LISTEN PORT
+# ------------------------------------------------------------
+
+if [[ -z "$LISTEN" ]]; then
+
+    if [[ -n "$OLD_PORT" ]]; then
+        LISTEN="0.0.0.0:$OLD_PORT"
     else
-        warn "Instala sysstat para obtener iostat."
-    fi
-}
-
-# ============================================================
-# 05. KERNEL
-# ============================================================
-
-kernel_info() {
-    section "05. KERNEL Y CONFIGURACION"
-
-    value "Kernel release:" "$(uname -r)"
-    value "Kernel version:" "$(uname -v)"
-    value "Kernel taint:" "$(cat /proc/sys/kernel/tainted 2>/dev/null)"
-    value "Modules cargados:" "$(lsmod 2>/dev/null | wc -l)"
-    value "Kernel lockdown:" "$(cat /sys/kernel/security/lockdown 2>/dev/null)"
-    value "Random entropy:" "$(cat /proc/sys/kernel/random/entropy_avail 2>/dev/null)"
-
-    printf '\n  PARAMETROS KERNEL\n'
-    for key in \
-        kernel.pid_max \
-        kernel.threads-max \
-        kernel.core_pattern \
-        kernel.core_uses_pid \
-        kernel.panic \
-        kernel.panic_on_oops \
-        kernel.sched_autogroup_enabled \
-        kernel.numa_balancing \
-        kernel.kptr_restrict \
-        kernel.dmesg_restrict \
-        kernel.perf_event_paranoid \
-        kernel.unprivileged_bpf_disabled \
-        kernel.yama.ptrace_scope
-    do
-        sysctl "$key" 2>/dev/null || true
-    done
-
-    printf '\n  MODULOS RELEVANTES\n'
-    lsmod 2>/dev/null | grep -Ei 'tcp|bbr|sch_fq|nf_conntrack|ip_tables|nf_tables|xt_' || true
-
-    printf '\n  ERRORES RECIENTES DEL KERNEL\n'
-    if cmd journalctl; then
-        journalctl -k -p err -n 30 --no-pager 2>/dev/null || true
-    elif cmd dmesg; then
-        dmesg --level=err,warn 2>/dev/null | tail -30 || true
-    fi
-}
-
-# ============================================================
-# 06. ALL SYSCTL
-# ============================================================
-
-all_sysctl() {
-    section "06. INVENTARIO COMPLETO SYSCTL"
-
-    info "Leyendo todos los parametros activos del kernel."
-    printf '\n'
-
-    sysctl -a 2>/dev/null | sort || true
-}
-
-# ============================================================
-# 07. TCP/IP
-# ============================================================
-
-tcp_info() {
-    section "07. OPTIMIZACION TCP/IP"
-
-    local keys=(
-        net.ipv4.ip_forward
-        net.ipv4.tcp_congestion_control
-        net.ipv4.tcp_available_congestion_control
-        net.ipv4.tcp_allowed_congestion_control
-        net.ipv4.tcp_available_ulp
-        net.ipv4.tcp_rmem
-        net.ipv4.tcp_wmem
-        net.ipv4.tcp_mem
-        net.core.rmem_max
-        net.core.rmem_default
-        net.core.wmem_max
-        net.core.wmem_default
-        net.core.optmem_max
-        net.core.netdev_max_backlog
-        net.core.netdev_budget
-        net.core.netdev_budget_usecs
-        net.core.somaxconn
-        net.core.default_qdisc
-        net.ipv4.tcp_max_syn_backlog
-        net.ipv4.tcp_max_tw_buckets
-        net.ipv4.tcp_max_orphans
-        net.ipv4.tcp_fin_timeout
-        net.ipv4.tcp_keepalive_time
-        net.ipv4.tcp_keepalive_intvl
-        net.ipv4.tcp_keepalive_probes
-        net.ipv4.tcp_retries1
-        net.ipv4.tcp_retries2
-        net.ipv4.tcp_syn_retries
-        net.ipv4.tcp_synack_retries
-        net.ipv4.tcp_syncookies
-        net.ipv4.tcp_fastopen
-        net.ipv4.tcp_sack
-        net.ipv4.tcp_dsack
-        net.ipv4.tcp_window_scaling
-        net.ipv4.tcp_timestamps
-        net.ipv4.tcp_ecn
-        net.ipv4.tcp_mtu_probing
-        net.ipv4.tcp_no_metrics_save
-        net.ipv4.tcp_moderate_rcvbuf
-        net.ipv4.tcp_notsent_lowat
-        net.ipv4.tcp_limit_output_bytes
-        net.ipv4.tcp_autocorking
-        net.ipv4.tcp_low_latency
-        net.ipv4.tcp_tw_reuse
-        net.ipv4.ip_local_port_range
-        net.ipv4.ip_local_reserved_ports
-        net.ipv4.route.gc_timeout
-        net.ipv4.neigh.default.gc_thresh1
-        net.ipv4.neigh.default.gc_thresh2
-        net.ipv4.neigh.default.gc_thresh3
-    )
-
-    for key in "${keys[@]}"; do
-        sysctl "$key" 2>/dev/null || true
-    done
-
-    printf '\n  ALGORITMOS TCP DISPONIBLES\n'
-    cat /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null || true
-
-    printf '\n  QDISC DISPONIBLES\n'
-    if cmd tc; then
-        tc qdisc show 2>/dev/null || true
-        printf '\n  DISCIPLINAS DISPONIBLES\n'
-        tc qdisc help 2>&1 | head -25 || true
+        LISTEN="0.0.0.0:80"
     fi
 
-    printf '\n  TCP GLOBAL\n'
-    cat /proc/net/snmp 2>/dev/null
+fi
 
-    printf '\n  TCP EXTENDIDO\n'
-    cat /proc/net/netstat 2>/dev/null
+# ------------------------------------------------------------
+# DETECT REDIRECTION
+# ------------------------------------------------------------
 
-    printf '\n  TCP SOCKET MEMORY\n'
-    cat /proc/net/sockstat 2>/dev/null
-    cat /proc/net/sockstat6 2>/dev/null || true
-}
+if [[ -z "$TARGET" ]]; then
 
-# ============================================================
-# 08. UDP / SOCKETS
-# ============================================================
-
-socket_info() {
-    section "08. UDP, SOCKETS Y CONEXIONES"
-
-    printf '\n  UDP CONFIGURACION\n'
-    for key in \
-        net.ipv4.udp_mem \
-        net.ipv4.udp_rmem_min \
-        net.ipv4.udp_wmem_min \
-        net.ipv4.udp_early_demux \
-        net.ipv4.udp_l3mdev_accept
-    do
-        sysctl "$key" 2>/dev/null || true
-    done
-
-    printf '\n  ESTADOS TCP\n'
-    if cmd ss; then
-        ss -s
-        printf '\n  CONEXIONES POR ESTADO\n'
-        ss -tanH 2>/dev/null | awk '{count[$1]++} END {for (s in count) print s, count[s]}' | sort
-        printf '\n  PUERTOS ESCUCHANDO\n'
-        ss -lntup 2>/dev/null || true
-        printf '\n  CONEXIONES ESTABLECIDAS\n'
-        ss -tan state established 2>/dev/null | head -30
-    fi
-
-    printf '\n  CONTEO DE SOCKETS\n'
-    for f in /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6; do
-        [[ -r "$f" ]] || continue
-        value "$f:" "$(( $(wc -l < "$f") - 1 ))"
-    done
-}
-
-# ============================================================
-# 09. CONNTRACK / FIREWALL
-# ============================================================
-
-firewall_info() {
-    section "09. NETFILTER, CONNTRACK Y FIREWALL"
-
-    for key in \
-        net.netfilter.nf_conntrack_max \
-        net.netfilter.nf_conntrack_count \
-        net.netfilter.nf_conntrack_buckets \
-        net.netfilter.nf_conntrack_tcp_timeout_established \
-        net.netfilter.nf_conntrack_tcp_timeout_time_wait \
-        net.netfilter.nf_conntrack_tcp_timeout_close_wait \
-        net.netfilter.nf_conntrack_udp_timeout \
-        net.netfilter.nf_conntrack_udp_timeout_stream
-    do
-        sysctl "$key" 2>/dev/null || true
-    done
-
-    printf '\n  CONNTRACK\n'
-    if [[ -r /proc/sys/net/netfilter/nf_conntrack_count ]]; then
-        value "Conexiones actuales:" "$(cat /proc/sys/net/netfilter/nf_conntrack_count)"
-        value "Limite maximo:" "$(cat /proc/sys/net/netfilter/nf_conntrack_max)"
-    fi
-
-    printf '\n  NFTABLES\n'
-    if cmd nft; then
-        nft list ruleset 2>/dev/null || warn "No se pudo leer nftables."
-    fi
-
-    printf '\n  IPTABLES\n'
-    if cmd iptables; then
-        iptables -L -n -v 2>/dev/null || true
-    fi
-
-    printf '\n  IP6TABLES\n'
-    if cmd ip6tables; then
-        ip6tables -L -n -v 2>/dev/null || true
-    fi
-
-    printf '\n  UFW\n'
-    if cmd ufw; then
-        ufw status verbose 2>/dev/null || true
-    fi
-}
-
-# ============================================================
-# 10. NETWORK INTERFACES
-# ============================================================
-
-network_info() {
-    section "10. INTERFACES DE RED"
-
-    printf '\n  INTERFACES\n'
-    if cmd ip; then
-        ip -br address 2>/dev/null || ip address
-        printf '\n  ROUTING\n'
-        ip route show 2>/dev/null
-        printf '\n  ROUTING IPv6\n'
-        ip -6 route show 2>/dev/null
-        printf '\n  RULES\n'
-        ip rule show 2>/dev/null
-    fi
-
-    printf '\n  PARAMETROS POR INTERFAZ\n'
-    for dir in /sys/class/net/*; do
-        [[ -d "$dir" ]] || continue
-        local iface
-        iface="${dir##*/}"
-
-        printf '\n  INTERFAZ: %s\n' "$iface"
-
-        for key in mtu tx_queue_len operstate speed duplex carrier \
-                   address type ifindex; do
-            [[ -r "$dir/$key" ]] || continue
-            printf '    %-18s %s\n' "$key" "$(cat "$dir/$key" 2>/dev/null)"
-        done
-
-        for key in rx_bytes tx_bytes rx_packets tx_packets \
-                   rx_errors tx_errors rx_dropped tx_dropped \
-                   collisions rx_missed_errors; do
-            [[ -r "$dir/statistics/$key" ]] || continue
-            printf '    %-18s %s\n' "$key" "$(cat "$dir/statistics/$key")"
-        done
-
-        if cmd ethtool; then
-            printf '\n    OFFLOADING\n'
-            ethtool -k "$iface" 2>/dev/null || true
-            printf '\n    DRIVER\n'
-            ethtool -i "$iface" 2>/dev/null || true
-        fi
-    done
-
-    printf '\n  TCP/IP INTERFACES\n'
-    for key in \
-        net.ipv4.conf.all.rp_filter \
-        net.ipv4.conf.default.rp_filter \
-        net.ipv4.conf.all.accept_redirects \
-        net.ipv4.conf.all.send_redirects \
-        net.ipv4.conf.all.accept_source_route \
-        net.ipv4.conf.all.log_martians \
-        net.ipv4.conf.all.arp_filter \
-        net.ipv4.conf.all.arp_ignore \
-        net.ipv4.conf.all.arp_announce \
-        net.ipv6.conf.all.disable_ipv6 \
-        net.ipv6.conf.all.accept_ra \
-        net.ipv6.conf.all.forwarding
-    do
-        sysctl "$key" 2>/dev/null || true
-    done
-}
-
-# ============================================================
-# 11. LIMITS
-# ============================================================
-
-limits_info() {
-    section "11. LIMITES DEL SISTEMA"
-
-    value "Ulimit actual:" "$(ulimit -a | tr '\n' ' ')"
-
-    printf '\n  LIMITES DEL PROCESO ACTUAL\n'
-    cat /proc/self/limits 2>/dev/null
-
-    printf '\n  FILE HANDLES\n'
-    for key in \
-        fs.file-max \
-        fs.nr_open \
-        fs.inotify.max_user_instances \
-        fs.inotify.max_user_watches \
-        fs.aio-max-nr \
-        fs.aio-nr
-    do
-        sysctl "$key" 2>/dev/null || true
-    done
-
-    printf '\n  FILE DESCRIPTORS DEL SISTEMA\n'
-    cat /proc/sys/fs/file-nr 2>/dev/null || true
-
-    printf '\n  PAM LIMITS\n'
-    if [[ -r /etc/security/limits.conf ]]; then
-        grep -Ev '^[[:space:]]*(#|$)' /etc/security/limits.conf || true
-    fi
-
-    printf '\n  LIMITS.D\n'
-    if [[ -d /etc/security/limits.d ]]; then
-        grep -RHnEv '^[[:space:]]*(#|$)' /etc/security/limits.d/ 2>/dev/null || true
-    fi
-}
-
-# ============================================================
-# 12. SYSTEMD
-# ============================================================
-
-systemd_info() {
-    section "12. SYSTEMD Y SERVICIOS"
-
-    if ! cmd systemctl; then
-        warn "Systemd no disponible."
-        return
-    fi
-
-    value "Version:" "$(systemctl --version | head -1)"
-    value "Servicios activos:" "$(systemctl list-units --type=service --state=running --no-legend 2>/dev/null | wc -l)"
-    value "Servicios fallidos:" "$(systemctl --failed --no-legend 2>/dev/null | wc -l)"
-
-    printf '\n  SERVICIOS HCR / BHTTP\n'
-    systemctl list-units --all --type=service --no-legend 2>/dev/null |
-        grep -Ei 'hcr-server|bhttp-server' || true
-
-    printf '\n  SERVICIOS FALLIDOS\n'
-    systemctl --failed --no-pager 2>/dev/null || true
-
-    printf '\n  DEFAULT LIMITS\n'
-    systemctl show --property=DefaultLimitNOFILE \
-        --property=DefaultTasksMax \
-        --property=DefaultTimeoutStartSec 2>/dev/null || true
-
-    printf '\n  SYSTEMD MANAGER\n'
-    systemctl show --no-pager \
-        -p DefaultCPUAccounting \
-        -p DefaultMemoryAccounting \
-        -p DefaultTasksAccounting \
-        -p DefaultLimitNOFILE \
-        -p DefaultTasksMax 2>/dev/null || true
-
-    printf '\n  SERVICIOS HCR / BHTTP: CONFIGURACION\n'
-    while IFS= read -r service; do
-        [[ -n "$service" ]] || continue
-        printf '\n  %s\n' "$service"
-        systemctl show "$service" --no-pager \
-            -p ActiveState \
-            -p SubState \
-            -p MainPID \
-            -p LimitNOFILE \
-            -p TasksMax \
-            -p CPUQuotaPerSecUSec \
-            -p MemoryMax \
-            -p MemoryHigh \
-            -p OOMScoreAdjust \
-            -p Nice \
-            -p Restart \
-            -p ExecStart 2>/dev/null || true
-    done < <(
-        systemctl list-units --all --type=service --no-legend 2>/dev/null |
-        awk '{print $1}' | grep -E '^(hcr-server|bhttp-server).*\.service$' || true
-    )
-}
-
-# ============================================================
-# 13. PERSISTENT CONFIGURATION
-# ============================================================
-
-persistent_info() {
-    section "13. CONFIGURACIONES PERSISTENTES"
-
-    printf '\n  /etc/sysctl.conf\n'
-    if [[ -r /etc/sysctl.conf ]]; then
-        grep -nEv '^[[:space:]]*(#|$)' /etc/sysctl.conf || true
-    fi
-
-    printf '\n  /etc/sysctl.d/\n'
-    if [[ -d /etc/sysctl.d ]]; then
-        find /etc/sysctl.d -maxdepth 1 -type f -name '*.conf' -print 2>/dev/null |
-        sort |
-        while IFS= read -r file; do
-            printf '\n  FILE: %s\n' "$file"
-            grep -nEv '^[[:space:]]*(#|$)' "$file" || true
-        done
-    fi
-
-    printf '\n  /usr/lib/sysctl.d Y /lib/sysctl.d\n'
-    for dir in /usr/lib/sysctl.d /lib/sysctl.d /run/sysctl.d; do
-        [[ -d "$dir" ]] || continue
-        find "$dir" -maxdepth 1 -type f -name '*.conf' -print 2>/dev/null | sort
-    done
-
-    printf '\n  SYSCTL CONFIGURACIONES DE RED\n'
-    for dir in /etc/NetworkManager/conf.d /etc/systemd/network; do
-        [[ -d "$dir" ]] || continue
-        find "$dir" -maxdepth 2 -type f -print 2>/dev/null
-    done
-
-    printf '\n  GRUB KERNEL PARAMETERS\n'
-    if [[ -r /etc/default/grub ]]; then
-        grep -nE 'GRUB_CMDLINE_LINUX|GRUB_DEFAULT' /etc/default/grub || true
-    fi
-}
-
-# ============================================================
-# 14. SECURITY
-# ============================================================
-
-security_info() {
-    section "14. SEGURIDAD DEL SISTEMA"
-
-    for key in \
-        kernel.kptr_restrict \
-        kernel.dmesg_restrict \
-        kernel.randomize_va_space \
-        kernel.yama.ptrace_scope \
-        kernel.unprivileged_bpf_disabled \
-        net.ipv4.tcp_syncookies \
-        net.ipv4.conf.all.accept_redirects \
-        net.ipv4.conf.all.send_redirects \
-        net.ipv4.conf.all.accept_source_route \
-        net.ipv4.conf.all.rp_filter \
-        net.ipv6.conf.all.accept_redirects
-    do
-        sysctl "$key" 2>/dev/null || true
-    done
-
-    printf '\n  SECURITY STATUS\n'
-    if cmd aa-status; then
-        aa-status 2>/dev/null | head -20 || true
-    fi
-
-    if cmd sestatus; then
-        sestatus 2>/dev/null || true
-    fi
-
-    printf '\n  SSH CONFIGURACION EFECTIVA\n'
-    if cmd sshd; then
-        sshd -T 2>/dev/null |
-            grep -E '^(maxsessions|maxstartups|clientaliveinterval|clientalivecountmax|tcpkeepalive|usepam|permitrootlogin)' || true
-    fi
-}
-
-# ============================================================
-# 15. SERVICES / PROCESS RESOURCE
-# ============================================================
-
-process_info() {
-    section "15. PROCESOS Y RECURSOS"
-
-    printf '\n  PROCESOS\n'
-    ps -eo pid,ppid,user,stat,ni,pri,%cpu,%mem,rss,comm --sort=-%cpu 2>/dev/null | head -25
-
-    printf '\n  PROCESOS EN ESTADO D\n'
-    ps -eo pid,stat,comm 2>/dev/null | awk '$2 ~ /^D/'
-
-    printf '\n  PROCESOS ZOMBIE\n'
-    ps -eo pid,ppid,stat,comm 2>/dev/null | awk '$3 ~ /^Z/'
-
-    printf '\n  THREADS\n'
-    value "Total threads:" "$(ps -eLf --no-headers 2>/dev/null | wc -l)"
-
-    printf '\n  RUN QUEUE\n'
-    cat /proc/loadavg 2>/dev/null
-
-    printf '\n  SCHEDULER\n'
-    for f in /proc/sys/kernel/sched_*; do
-        [[ -r "$f" ]] || continue
-        printf '  %-55s %s\n' "$f" "$(cat "$f" 2>/dev/null)"
-    done
-}
-
-# ============================================================
-# 16. DIAGNOSTIC FINDINGS
-# ============================================================
-
-diagnostics() {
-    section "16. ANALISIS AUTOMATICO DE HALLAZGOS"
-
-    local mem_total mem_available swap_total
-    local file_max file_used conntrack_count conntrack_max
-    local syn_backlog somaxconn backlog
-    local retrans syncookies congestion qdisc
-
-    mem_total=$(awk '/MemTotal:/ {print $2}' /proc/meminfo)
-    mem_available=$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)
-    swap_total=$(awk '/SwapTotal:/ {print $2}' /proc/meminfo)
-
-    if [[ "$mem_total" =~ ^[0-9]+$ && "$mem_available" =~ ^[0-9]+$ && "$mem_total" -gt 0 ]]; then
-        local used_percent=$(( (mem_total - mem_available) * 100 / mem_total ))
-        value "RAM utilizada aproximada:" "${used_percent}%"
-
-        if (( used_percent >= 90 )); then
-            bad "Uso de RAM critico."
-        elif (( used_percent >= 80 )); then
-            warn "Uso elevado de RAM."
-        else
-            ok "Disponibilidad de RAM sin alerta critica."
-        fi
-    fi
-
-    if [[ "$swap_total" =~ ^[0-9]+$ ]] && (( swap_total > 0 )); then
-        ok "SWAP habilitada."
+    if [[ -n "$OLD_SSH" ]]; then
+        TARGET="127.0.0.1:$OLD_SSH"
     else
-        warn "No se detecta SWAP habilitada."
+        TARGET="127.0.0.1:22"
     fi
 
-    file_max=$(cat /proc/sys/fs/file-max 2>/dev/null || echo 0)
-    read -r file_used _ < /proc/sys/fs/file-nr 2>/dev/null || file_used=0
+fi
 
-    if [[ "$file_max" =~ ^[0-9]+$ && "$file_used" =~ ^[0-9]+$ && "$file_max" -gt 0 ]]; then
-        value "File handles utilizados:" "$file_used / $file_max"
-        if (( file_used * 100 / file_max >= 90 )); then
-            warn "Descriptores de archivo cercanos al limite."
-        fi
-    fi
+# ------------------------------------------------------------
+# VALIDATE PARAMETERS
+# ------------------------------------------------------------
 
-    conntrack_count=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
-    conntrack_max=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)
+if [[ ! "$TARGET" =~ ^[^[:space:]]+:[0-9]+$ ]]; then
+    err "Destino SSH inválido: $TARGET"
+    exit 1
+fi
 
-    if [[ "$conntrack_count" =~ ^[0-9]+$ && "$conntrack_max" =~ ^[0-9]+$ && "$conntrack_max" -gt 0 ]]; then
-        value "Conntrack:" "$conntrack_count / $conntrack_max"
-        if (( conntrack_count * 100 / conntrack_max >= 85 )); then
-            warn "Conntrack se encuentra cerca de su limite."
-        else
-            ok "Conntrack con margen disponible."
-        fi
-    fi
+TARGET_PORT="${TARGET##*:}"
 
-    syn_backlog=$(sysctl -n net.ipv4.tcp_max_syn_backlog 2>/dev/null || echo N/D)
-    somaxconn=$(sysctl -n net.core.somaxconn 2>/dev/null || echo N/D)
-    backlog=$(sysctl -n net.core.netdev_max_backlog 2>/dev/null || echo N/D)
+if (( TARGET_PORT < 1 || TARGET_PORT > 65535 )); then
+    err "Puerto SSH fuera de rango."
+    exit 1
+fi
 
-    value "TCP SYN backlog:" "$syn_backlog"
-    value "Socket backlog:" "$somaxconn"
-    value "Network backlog:" "$backlog"
+if [[ ! "$LISTEN" =~ ^[a-zA-Z0-9.:,\[\]]+$ ]]; then
+    err "Formato de escucha inválido."
+    exit 1
+fi
 
-    congestion=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo N/D)
-    qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo N/D)
+IFS=',' read -r -a LISTENERS <<< "$LISTEN"
 
-    value "Congestion control:" "$congestion"
-    value "Default qdisc:" "$qdisc"
+if (( ${#LISTENERS[@]} == 0 )); then
+    err "No se detectaron listeners."
+    exit 1
+fi
 
-    if [[ "$congestion" == bbr ]]; then
-        ok "BBR aparece como algoritmo congestion control activo."
-    else
-        warn "El algoritmo TCP activo no es BBR."
-    fi
+for LISTENER in "${LISTENERS[@]}"; do
 
-    if [[ "$qdisc" == fq ]]; then
-        ok "Qdisc por defecto configurado como fq."
-    else
-        warn "La qdisc por defecto no aparece como fq."
-    fi
-
-    syncookies=$(sysctl -n net.ipv4.tcp_syncookies 2>/dev/null || echo N/D)
-    value "TCP SYN cookies:" "$syncookies"
-
-    printf '\n  CONTADORES DE RETRANSMISION\n'
-    if [[ -r /proc/net/snmp ]]; then
-        awk '
-        /^Tcp:/ {
-            if (!header) {
-                for (i=1; i<=NF; i++) names[i]=$i
-                header=1
-            } else {
-                for (i=1; i<=NF; i++)
-                    if (names[i] == "RetransSegs")
-                        print "  RetransSegs:", $i
-                header=0
-            }
-        }' /proc/net/snmp
-    fi
-
-    printf '\n  ERRORES DE INTERFACES\n'
-    for f in /sys/class/net/*/statistics/{rx_errors,tx_errors,rx_dropped,tx_dropped}; do
-        [[ -r "$f" ]] || continue
-        local n
-        n=$(cat "$f")
-        if [[ "$n" =~ ^[0-9]+$ ]] && (( n > 0 )); then
-            warn "${f%/statistics/*}: ${f##*/} = $n"
-        fi
-    done
-
-    printf '\n  SERVICIOS FALLIDOS\n'
-    if cmd systemctl; then
-        local failed
-        failed=$(systemctl --failed --no-legend 2>/dev/null | wc -l)
-        if (( failed > 0 )); then
-            warn "Se detectan servicios fallidos."
-        else
-            ok "No se detectan servicios fallidos."
-        fi
-    fi
-
-    printf '\n  NOTA TECNICA\n'
-    info "Los valores elevados no son necesariamente optimos."
-    info "La configuracion adecuada depende de RAM, CPU, NIC y carga."
-    info "Las retransmisiones y errores deben evaluarse en intervalos."
-    info "BBR y fq deben verificarse tambien en la interfaz real."
-}
-
-# ============================================================
-# 17. SUMMARY
-# ============================================================
-
-summary() {
-    section "17. RESUMEN DEL SISTEMA"
-
-    value "Sistema:" "$(uname -s)"
-    value "Kernel:" "$(uname -r)"
-    value "CPU:" "$(nproc)"
-    value "RAM:" "$(free -h | awk '/Mem:/ {print $2}')"
-    value "SWAP:" "$(free -h | awk '/Swap:/ {print $2}')"
-    value "Disco raiz:" "$(df -h / | awk 'NR==2 {print $2 " total / " $4 " disponible"}')"
-    value "TCP:" "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
-    value "QDISC:" "$(sysctl -n net.core.default_qdisc 2>/dev/null)"
-    value "SOMAXCONN:" "$(sysctl -n net.core.somaxconn 2>/dev/null)"
-    value "BACKLOG:" "$(sysctl -n net.core.netdev_max_backlog 2>/dev/null)"
-    value "FD MAX:" "$(sysctl -n fs.file-max 2>/dev/null)"
-
-    printf '\n'
-    line
-    printf '%b\n' "${GREEN}       AUDITORIA DEL SISTEMA COMPLETADA${RESET}"
-    printf '%b\n' "${WHITE}       EPRO DEV - SYSTEM PERFORMANCE${RESET}"
-    line
-    printf '\n'
-}
-
-# ============================================================
-# MAIN
-# ============================================================
-
-main() {
-    if [[ "${EUID}" -ne 0 ]]; then
-        printf '%b\n' "${YELLOW}Ejecuta este script como root para obtener una auditoria completa.${RESET}"
-        printf '  sudo bash %s\n' "$0"
+    if [[ ! "$LISTENER" =~ :([0-9]+)$ ]]; then
+        err "Listener inválido: $LISTENER"
         exit 1
     fi
 
-    header
+    PORT="${BASH_REMATCH[1]}"
 
-    system_info
-    cpu_info
-    memory_info
-    storage_info
-    kernel_info
-    tcp_info
-    socket_info
-    firewall_info
-    network_info
-    limits_info
-    systemd_info
-    persistent_info
-    security_info
-    process_info
-    diagnostics
-    summary
+    if (( PORT < 1 || PORT > 65535 )); then
+        err "Puerto de escucha inválido: $PORT"
+        exit 1
+    fi
+
+done
+
+# ------------------------------------------------------------
+# VALIDATE EXTRA ARGUMENTS
+# ------------------------------------------------------------
+
+HELP_OUTPUT=$("$BINARY" --help 2>&1 || true)
+
+for ARG in "${EXTRA[@]}"; do
+
+    case "$ARG" in
+        -*)
+            FLAG="${ARG%%=*}"
+
+            if ! grep -Fq -- "$FLAG" <<< "$HELP_OUTPUT"; then
+                err "Parámetro no compatible con el binario: $FLAG"
+                exit 1
+            fi
+            ;;
+    esac
+
+done
+
+# ------------------------------------------------------------
+# DISPLAY CONFIGURATION
+# ------------------------------------------------------------
+
+echo -e "${WHITE}CONFIGURACIÓN DETECTADA${RESET}"
+echo
+
+echo -e "  Servicio:             ${CYAN}$SERVICE${RESET}"
+echo -e "  Ejecutable:           ${CYAN}$BINARY${RESET}"
+echo -e "  Escucha:              ${CYAN}$LISTEN${RESET}"
+echo -e "  Redirección SSH:      ${CYAN}$TARGET${RESET}"
+echo -e "  Listeners:            ${CYAN}${#LISTENERS[@]}${RESET}"
+
+echo
+
+# ------------------------------------------------------------
+# BUILD EXECSTART
+# ------------------------------------------------------------
+
+NEW_ARGS=(
+    "$BINARY"
+    "-listen"
+    "$LISTEN"
+    "-target"
+    "$TARGET"
+)
+
+NEW_ARGS+=("${EXTRA[@]}")
+
+# Build a systemd-compatible command line.
+# Values containing special characters are double-quoted.
+
+quote_systemd() {
+    local VALUE="$1"
+
+    if [[ "$VALUE" =~ [[:space:]\"\\] ]]; then
+        VALUE=${VALUE//\\/\\\\}
+        VALUE=${VALUE//\"/\\\"}
+        printf '"%s"' "$VALUE"
+    else
+        printf '%s' "$VALUE"
+    fi
 }
 
-main "$@"
+NEW_EXEC=""
+
+for ARG in "${NEW_ARGS[@]}"; do
+    QUOTED=$(quote_systemd "$ARG")
+    NEW_EXEC+="${NEW_EXEC:+ }$QUOTED"
+done
+
+# ------------------------------------------------------------
+# CREATE BACKUP
+# ------------------------------------------------------------
+
+mkdir -p "$BACKUP_DIR"
+
+BACKUP="$BACKUP_DIR/bhttp-$(date +%Y%m%d-%H%M%S).service"
+
+if [[ -e "$BACKUP" ]]; then
+    err "El respaldo ya existe. Intenta nuevamente."
+    exit 1
+fi
+
+cp -a "$UNIT" "$BACKUP"
+
+ok "Respaldo original creado."
+
+# ------------------------------------------------------------
+# PREPARE TEMPORARY UNIT
+# ------------------------------------------------------------
+
+TEMP_FILE=$(mktemp "${UNIT}.XXXXXX")
+
+awk -v replacement="$NEW_EXEC" '
+    BEGIN { replaced=0 }
+
+    /^[[:space:]]*ExecStart[[:space:]]*=/ {
+        if (!replaced) {
+            print "ExecStart=" replacement
+            replaced=1
+            next
+        }
+    }
+
+    { print }
+
+    END {
+        if (!replaced) exit 1
+    }
+' "$UNIT" > "$TEMP_FILE" || {
+    err "No se pudo generar el servicio."
+    exit 1
+}
+
+chmod --reference="$UNIT" "$TEMP_FILE"
+
+# ------------------------------------------------------------
+# VALIDATE SYSTEMD UNIT
+# ------------------------------------------------------------
+
+if ! systemd-analyze verify "$TEMP_FILE" 2>&1; then
+    err "Systemd rechazó la configuración."
+    exit 1
+fi
+
+# ------------------------------------------------------------
+# APPLY REPAIR
+# ------------------------------------------------------------
+
+info "Aplicando reparación..."
+
+systemctl stop "$SERVICE"
+
+if ! cat "$TEMP_FILE" > "$UNIT"; then
+    err "No se pudo actualizar el servicio."
+    cp -a "$BACKUP" "$UNIT"
+    systemctl daemon-reload
+    exit 1
+fi
+
+REPAIRED=1
+
+rm -f "$TEMP_FILE"
+TEMP_FILE=""
+
+systemctl daemon-reload
+
+# ------------------------------------------------------------
+# RESTART
+# ------------------------------------------------------------
+
+info "Reiniciando BHTTP..."
+
+systemctl reset-failed "$SERVICE" || true
+
+if ! systemctl restart "$SERVICE"; then
+
+    err "BHTTP no pudo reiniciarse."
+
+    echo
+    journalctl -u "$SERVICE" -n 30 --no-pager
+
+    echo
+    warn "La configuración reparada se conserva."
+    warn "Respaldo original: $BACKUP"
+
+    exit 1
+fi
+
+sleep 2
+
+# ------------------------------------------------------------
+# FINAL VERIFICATION
+# ------------------------------------------------------------
+
+echo
+
+if systemctl is-active --quiet "$SERVICE"; then
+
+    ok "BHTTP está activo."
+
+    echo
+    echo -e "${WHITE}ESTADO DEL SERVICIO${RESET}"
+
+    systemctl status "$SERVICE" --no-pager -l
+
+    echo
+    echo -e "${WHITE}PUERTOS DE ESCUCHA${RESET}"
+
+    ss -lntp | grep -F 'BHTTP' || true
+
+    echo
+    ok "Reparación completada."
+    info "Respaldo: $BACKUP"
+
+else
+
+    err "BHTTP no consiguió mantenerse activo."
+
+    echo
+    journalctl -u "$SERVICE" -n 30 --no-pager
+
+    echo
+    warn "Revisa los registros antes de realizar otros cambios."
+    warn "Respaldo original: $BACKUP"
+
+    exit 1
+
+fi
+
+echo
+echo -e "${GRAY}SCRIPT BY. ChristopherAGT${RESET}"
+echo
+
